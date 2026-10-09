@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { sectionsFromOutline, suggestOutline } from './outline.js'
 import { salesOutlineCandidate, sourcePriority, technicalHeading } from './sales.js'
 import { cleanMaterialText, isReadableProse } from './source-quality.js'
+import { hasInternalCopy } from './customer-copy.js'
 
 const MAX_SOURCE_CHARS = 24_000
 const MAX_LINKS = 5
@@ -39,12 +40,12 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     const sourceFiles = (outline[index].sourcePaths ?? []).map(sourcePath =>
       (manifest.files ?? []).find(file => file.path === sourcePath)).filter(Boolean)
     const message = !sourceFiles.length
-      ? '本章暂无可核对的材料，需要补充资料后完善。'
+      ? '待与贵方确认：本部分将在双方核对相关资料后补充。'
       : sourceFiles.every(file => file.kind === 'user')
-      ? '目前只有产品名称，产品能力、客户问题与适用场景均待资料核实。'
+      ? '待与贵方确认：产品能力、适用场景与贵方需求仍需进一步核对。'
       : settings.sales && sourceFiles.length && sourceFiles.every(file => sourcePriority(file) < 0)
-        ? '现有资料主要说明技术实现，客户价值、适用场景及对应问题需要补充业务资料后确认。'
-        : '本章尚未形成可核对的客户表述，请根据所列资料复核并补充；原文不会直接作为方案正文。'
+        ? '待与贵方确认：我们将结合贵方业务场景，进一步确认方案的适用范围与实施方式。'
+        : '待与贵方确认：本部分内容将在进一步沟通并核对资料后完善。'
     return { ...section, blocks: [{ type: 'para', text: message }] }
   })
   const sources = await readSources(ctx, agent, signal, manifest)
@@ -64,7 +65,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
   try {
     for await (const chunk of ctx.llm.stream({
       provider: route.provider, model: route.model,
-      system: `你是售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps","text":"完整段落，仅 para 使用","items":["要点，仅 bullets/steps 使用"],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。每章尽量写 2—4 个有信息量的块：先解释业务问题，再说明产品做法、适用场景或价值机制；列表和步骤用于真正适合的内容，不要一章只写一句空泛总结。每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。公开资料只能作为待核实参考，推断痛点须写待验证，不能写成这个客户已发生的事实；企业产品能力要标明是内部材料还是公开介绍。不要伪造收益、案例、价格或承诺。`,
+      system: `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps","text":"完整段落，仅 para 使用","items":["要点，仅 bullets/steps 使用"],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。每章尽量写 2—4 个有信息量的块：先解释业务问题，再说明产品做法、适用场景或价值机制；列表和步骤用于真正适合的内容，不要一章只写一句空泛总结。每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。公开资料只能作为待核实参考，推断痛点须写待验证，不能写成这个客户已发生的事实；企业产品能力要标明是内部材料还是公开介绍。不要伪造收益、案例、价格或承诺。`,
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
       maxTokens: 6500, signal, sessionId: agent?.session?.id,
@@ -86,18 +87,19 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
           || !isReadableProse(block.quote)) return []
         const type = block.type ?? 'para'
         let body
-        if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text) && block.text.length <= 1200) {
+        if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
+          && !hasInternalCopy(block.text) && block.text.length <= 1200) {
           body = { type, text: block.text.trim() }
         } else if (['bullets', 'steps'].includes(type) && Array.isArray(block.items)
           && block.items.length >= 2 && block.items.length <= 6
-          && block.items.every(item => isReadableProse(item) && item.length <= 180)) {
+          && block.items.every(item => isReadableProse(item) && !hasInternalCopy(item) && item.length <= 180)) {
           body = { type, items: block.items.map(item => item.trim()) }
         }
         if (!body) return []
         return [body, { type: 'quote', text: `来源：${block.path}\n${block.quote.trim()}` }]
       })
       const lead = typeof candidate.lead === 'string' && candidate.lead.trim().length <= 120
-        && isReadableProse(candidate.lead) && blocks.length
+        && isReadableProse(candidate.lead) && !hasInternalCopy(candidate.lead) && blocks.length
         ? candidate.lead.trim() : undefined
       return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
     })

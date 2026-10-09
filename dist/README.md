@@ -17,10 +17,10 @@
 - Node.js 22 或更新版本、pnpm，以及安装依赖时可访问 npm 软件包源的网络。
 - DSH 当前会话可用的模型服务。自动生成时，模型负责按资料写正文；模型不可用时只生成带待确认标记的结构稿。使用本地材料入口时才需要本地文件。
 
-把 wlyd-dsh-presales-solution-0.8.1.tgz 放在本机任意目录，执行：
+把 wlyd-dsh-presales-solution-0.8.2.tgz 放在本机任意目录，执行：
 
 ~~~sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.1.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.2.tgz"
 ~~~
 
 安装成功后**重启**正在运行的 DSH Web：
@@ -69,7 +69,9 @@ printf '# 示例产品\n\n客户痛点：售前资料分散，查找费时。产
 
 DSH 的结果消息会显示方案结构预览、章节列表，以及“打开幻灯片并编辑”“下载 Word/Markdown/JSON”入口。这些地址由 DSH Web 提供，须先按启动终端给出的方式完成认证，再在同一浏览器中打开；下载内容与本轮 `solution.json` 同步。文件仍保存在会话工作目录的 `presales-runs/` 下，可按上表查找。HTML 的 PDF 输出使用浏览器“打印 → 保存为 PDF”，并非服务端生成 PDF。
 
-HTML 使用 16:9 页面，按浏览器视口完整缩放。深色双栏封面、目录、章节、论点与来源、痛点与对应做法按售前阅读顺序选用不同版式；可纵向浏览，也可点“下一页”或用方向键、PageUp/PageDown、空格、Home/End 逐页演示。页码控制旁的“隐藏来源”按钮可切换来源注释、痛点依据和表格依据列的显示；再次点击“显示来源”即可恢复。这只影响当前 HTML 的展示与打印，不删除 JSON、Markdown、Word 中的依据。浏览器打印输出全部页面。随包附带的 `guides/slide-design.md` 和 `skills/wlyd-presales-html-ppt/SKILL.md` 记录设计与检查规则；安装后该原创 Skill 会注册到 DSH Skill 目录，确定性路由则由插件渲染器直接执行这些规则。参考来源为 [SkillHub html-ppt-skill 2.3.0](https://skillhub.cn/skills/user_e9af5021/html-ppt-skill)，本包没有复制其 ZIP 模板或代码。当前**没有可编辑 PPTX 导出**，也不依赖 WorkBuddy 的 `tencent-pptx`。
+HTML 使用 16:9 页面，按浏览器视口完整缩放。封面只展示方案主题和必要抬头，目录单独成页。正文按内容选择大字主张、能力清单、流程时间线、痛点与方案连接图、截图和表格；标题、正文与依据有明确层级。可纵向浏览，也可点“下一页”或用方向键、PageUp/PageDown、空格、Home/End 逐页演示。页码控制旁的“隐藏来源”按钮可切换来源注释、痛点依据和表格依据列的显示；再次点击“显示来源”即可恢复。这只影响当前 HTML 的展示与打印，不删除 JSON、Markdown、Word 中的依据。浏览器打印输出全部页面。随包附带的 `guides/slide-design.md` 和 `skills/wlyd-presales-html-ppt/SKILL.md` 记录设计与检查规则；安装后该原创 Skill 会注册到 DSH Skill 目录，确定性渲染器已把页型选择和层级规则落实在 HTML 中。参考 Codex `impeccable`、`html-design-master`、`guizang-ppt-skill` 的设计方法以及 [SkillHub html-ppt-skill 2.3.0](https://skillhub.cn/skills/user_e9af5021/html-ppt-skill)，本包没有复制外部模板或代码。当前**没有可编辑 PPTX 导出**，也不依赖 WorkBuddy 的 `tencent-pptx`。
+
+生成阶段会要求模型使用面客话语；写入同版 JSON 前还会转换已知的内部制作文案，再同步输出 HTML、Markdown 和 Word。封面不出现内部复核提示，来源引文与路径不被润色。没有足够证据的内容仍会明确写“待与贵方确认”，不能把推断当作已确认的客户事实。
 
 0.6.1 起长段落、列表、表格和痛点依据会按文字量拆页，超长路径可换行；页面内保留边界安全区。封面主标题、章节标题、内容页标题和卡片小标题有明确字号层级。极端长内容若仍超出单页容量，会留在页内可滚动区域，打印前建议逐页检查。
 

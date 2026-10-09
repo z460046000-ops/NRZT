@@ -22,4 +22,9 @@ test('长内容拆页且保留文字，标题层级与视口安全规则存在',
   assert.match(html, /\.table\{[^}]*table-layout:fixed/)
   assert.match(html, /\.divider h2\{[^}]*font-size:44px/)
   assert.match(html, /\.head h2\{[^}]*font-size:30px/)
+  const cover = html.match(/<section class="slide cover">[\s\S]*?<\/section>/u)?.[0]
+  assert.ok(cover)
+  assert.doesNotMatch(cover, /内容结构|待人工复核|<ol>/u)
+  assert.match(html, /<section class="slide toc-slide">/u)
+  assert.match(html, /cover-geometry/u)
 })

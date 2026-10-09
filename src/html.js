@@ -74,7 +74,7 @@ function blockWeight(block) {
   }
 }
 
-const PAGE_CAPACITY = 8.3
+const PAGE_CAPACITY = 7.2
 
 function splitText(value, maxLength) {
   const text = String(value)
@@ -92,7 +92,7 @@ function splitText(value, maxLength) {
 
 function splitBlock(block) {
   if (block.type === 'para' || block.type === 'quote') {
-    return splitText(block.text, block.type === 'quote' ? 220 : 330).map(text => ({ ...block, text }))
+    return splitText(block.text, block.type === 'quote' ? 200 : 270).map(text => ({ ...block, text }))
   }
   if (block.type === 'bullets' || block.type === 'steps') {
     const entries = block.items.flatMap((item, index) => splitText(item, block.type === 'steps' ? 95 : 180)
@@ -220,18 +220,14 @@ function renderCard(block, assetByName, features) {
 
 function coverSlide(solution, t) {
   const meta = solution.meta
-  const titleSize = solution.title.length > 70 ? 38 : solution.title.length > 35 ? 47 : 56
+  const titleSize = solution.title.length > 70 ? 46 : solution.title.length > 35 ? 56 : 68
   return `<section class="slide cover">
-  <div class="cover-top"><span>${esc(meta.company ?? '售前解决方案')}</span><span>待人工复核</span></div>
+  <div class="cover-top"><span>${esc(meta.company ?? '')}</span><span>${esc(meta.date ?? '')}</span></div>
   <div class="cover-grid"><div class="cover-main">
-    <span class="cover-label">售前解决方案 / ${esc(meta.product ?? '产品方案')}</span>
     <h1 style="font-size:${titleSize}px">${esc(solution.title)}</h1>
     ${solution.subtitle ? `<p class="sub">${esc(solution.subtitle)}</p>` : ''}
-  </div><aside class="cover-outline"><h2>内容结构</h2><ol>
-    ${solution.sections.slice(0, 5).map((section, index) => `<li><span>${String(index + 1).padStart(2, '0')}</span><strong>${esc(section.heading)}</strong></li>`).join('')}
-  </ol></aside>
-  </div>
-  <div class="cover-bottom"><span>${esc(meta.version ?? '方案初稿')}</span><span>${esc(meta.date ?? '')}</span></div>
+  </div><div class="cover-geometry" aria-hidden="true"><span></span><span></span><span></span></div></div>
+  <div class="cover-bottom"><span>${esc(meta.product ?? '')}</span><span>${esc(meta.contact ?? '')}</span></div>
 </section>`
 }
 
@@ -269,8 +265,11 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   }).join('\n')
   const gap = blocks.length > 1 ? ' style="gap:20px"' : ''
   const tag = solution.meta.product ?? solution.title
-  const headingSize = section.heading.length > 60 ? 21 : section.heading.length > 30 ? 25 : 30
-  return `<section class="slide content-slide${statement ? ' statement-slide' : ''}">
+  const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
+  const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
+  const visual = types.includes('steps') ? ' process-slide' : types.includes('image') ? ' evidence-slide'
+    : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? ' capability-slide' : ''
+  return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
   <div class="body"${gap}>
@@ -301,9 +300,9 @@ function paginateLink(link) {
 /** 痛点页与方案页使用同一编号；每页最多两组，保留阅读和证据空间。 */
 function linkedSlide(solution, section, links, solutionPage) {
   const tag = solution.meta.product ?? solution.title
-  const headingSize = section.heading.length > 60 ? 21 : section.heading.length > 30 ? 25 : 30
+  const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
   const cards = links.map(link => solutionPage
-    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></div><span class="pair-arrow" aria-hidden="true">→</span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应做法${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3><p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p></div></article>`
+    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3><p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p></div></article>`
     : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></article>`).join('\n')
   return `<section class="slide linked-slide ${solutionPage ? 'solution-links' : 'pain-links'}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
@@ -316,7 +315,7 @@ function linkedSlide(solution, section, links, solutionPage) {
 function closingSlide(solution, t) {
   return `<section class="slide closing">
   <div>
-    <h2>期待与您深入合作</h2>
+    <h2>期待与您共同推进下一步</h2>
     <p>${esc([solution.meta.company, solution.meta.contact].filter(Boolean).join(' · '))}</p>
   </div>
 </section>`
@@ -581,21 +580,19 @@ body.single-slide .slide{display:none}
 body.single-slide .slide.preview-active{display:block;margin:0;box-shadow:none}
 body.single-slide .slide.closing.preview-active{display:flex}
 @media print{body.single-slide{display:block!important;min-height:0;background:#fff}body.single-slide .slide{display:block}body.single-slide .slide.closing{display:flex}}
-/* 内容驱动的版式：封面交代结构，正文突出结论和依据，减少重复的框。 */
+/* 售前页型：用内容关系决定版式，字体角色和图形只服务于阅读顺序。 */
 .cover::after{display:none}
 .cover-top{top:42px;left:76px;right:76px;padding-bottom:18px;border-bottom:1px solid color-mix(in srgb,var(--hero-ink) 25%,transparent);color:var(--hero-muted);font-size:14px;letter-spacing:0}
 .cover-top span:last-child{color:var(--hero-muted);font-weight:500}
-.cover-grid{position:absolute;inset:142px 76px 124px;display:grid;grid-template-columns:minmax(0,1.52fr) minmax(0,.82fr);gap:70px;min-height:0}
+.cover-grid{position:absolute;inset:142px 76px 124px;display:grid;grid-template-columns:minmax(0,1fr) 160px;gap:70px;min-height:0}
 .cover-main{display:flex;flex-direction:column;justify-content:center;min-width:0;overflow:auto}
-.cover-label{display:block;margin-bottom:24px;color:var(--hero-muted);font-size:15px;font-weight:600}
-.cover h1{max-width:100%;font-weight:750;line-height:1.16;color:var(--hero-ink);letter-spacing:-.035em}
-.cover .sub{max-width:100%;margin-top:24px;font-size:22px;line-height:1.5;color:var(--hero-muted)}
-.cover-outline{align-self:center;border-top:1px solid color-mix(in srgb,var(--hero-ink) 35%,transparent);min-width:0;max-height:100%;overflow:auto}
-.cover-outline h2{padding-top:20px;color:var(--hero-muted);font-size:15px;font-weight:600}
-.cover-outline ol{list-style:none;margin-top:28px}
-.cover-outline li{display:grid;grid-template-columns:36px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid color-mix(in srgb,var(--hero-ink) 16%,transparent);color:var(--hero-ink)}
-.cover-outline li span{color:var(--hero-muted);font-size:13px;font-variant-numeric:tabular-nums}
-.cover-outline li strong{font-size:17px;line-height:1.4;font-weight:520;overflow-wrap:anywhere}
+.cover h1{max-width:100%;font-weight:760;line-height:1.13;color:var(--hero-ink);letter-spacing:-.032em;text-wrap:balance}
+.cover .sub{max-width:850px;margin-top:30px;font-size:23px;line-height:1.5;color:var(--hero-muted)}
+.cover-geometry{position:relative;align-self:center;height:282px;border-left:1px solid color-mix(in srgb,var(--hero-ink) 34%,transparent)}
+.cover-geometry::before{content:"";position:absolute;left:-5px;top:50%;width:9px;height:9px;background:var(--red);transform:translateY(-50%)}
+.cover-geometry span{position:absolute;left:0;height:1px;background:color-mix(in srgb,var(--hero-ink) 30%,transparent)}
+.cover-geometry span:nth-child(1){top:16%;width:95px}.cover-geometry span:nth-child(2){top:50%;width:145px;background:var(--red)}
+.cover-geometry span:nth-child(3){top:84%;width:70px}
 .cover-bottom{left:76px;right:76px;bottom:44px;padding-top:18px;border-top:1px solid color-mix(in srgb,var(--hero-ink) 25%,transparent);color:var(--hero-muted);font-size:13px}
 .toc{grid-template-columns:1fr;gap:0;max-width:1100px;padding-top:28px;max-height:520px}
 .toc-item{grid-template-columns:74px 1fr;min-height:72px;padding:12px 0}
@@ -603,29 +600,48 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .toc-item strong{font-size:22px;font-weight:600}
 .divider .inner{position:relative;padding-left:100px}
 .divider .chap{font-size:84px;line-height:1;font-weight:700;letter-spacing:-.045em;color:var(--hero-muted);opacity:.5}
-.divider h2{max-width:940px;margin-top:16px;font-size:55px;color:var(--hero-ink)}
+.divider h2{max-width:940px;margin-top:16px;font-size:62px;color:var(--hero-ink);text-wrap:balance}
 .divider p{color:var(--hero-muted)}
-.content-slide .head::after,.linked-slide .head::after{width:44px;margin-top:15px}
-.content-slide .head{max-height:142px}
-.content-slide .head h2{font-size:32px!important}
-.content-slide .head .lead{font-size:16px;line-height:1.45;max-width:900px}
-.content-slide .body{top:180px;gap:17px;padding-top:18px}
+.content-slide .head::after,.linked-slide .head::after{width:48px;margin-top:17px}
+.content-slide .head,.linked-slide .head{max-height:160px}
+.content-slide .head h2,.linked-slide .head h2{line-height:1.17;letter-spacing:-.028em;text-wrap:balance}
+.content-slide .head .lead{font-size:18px;line-height:1.48;max-width:900px;margin-top:15px}
+.content-slide .body{top:196px;gap:18px;padding-top:12px}
+.linked-body{top:196px}
 .statement-slide .body{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,.65fr);align-items:center;gap:66px;padding-top:0}
 .statement-slide .body:has(> :only-child){grid-template-columns:minmax(0,850px)}
-.statement-slide .para{font-size:30px;line-height:1.53;letter-spacing:-.015em;font-weight:560}
+.sources-hidden .statement-slide .body{grid-template-columns:minmax(0,1fr)}
+.statement-slide .para{font-size:35px;line-height:1.46;letter-spacing:-.02em;font-weight:620;text-wrap:pretty}
 .statement-slide .source-note{align-self:center;border-top:2px solid var(--red);padding-top:19px}
 .statement-slide .source-note p{max-height:200px;font-size:15px;line-height:1.58}
-.para{max-width:1040px;font-size:22px;line-height:1.62;color:var(--ink);font-weight:480}
+.para{max-width:1000px;font-size:21px;line-height:1.58;color:var(--ink);font-weight:480;text-wrap:pretty}
 .source-note{max-width:1030px;padding-top:10px;border-top:1px solid var(--line);color:var(--ink2)}
 .source-note strong{display:block;font-size:12px;font-weight:700;color:var(--ink3)}
 .source-note p{margin-top:5px;font-size:13px;line-height:1.48;color:var(--ink2);max-height:62px;overflow:auto}
 .editorial-quote{padding:18px 0;border-top:1px solid var(--line);font-size:20px;line-height:1.55;color:var(--ink2)}
 .card,.card.notice{background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0}
-.card li{font-size:19px;line-height:1.55;color:var(--ink)}
+.card li{font-size:19px;line-height:1.55;color:var(--ink);text-wrap:pretty}
 .card li+li{margin-top:9px}
 .grid{gap:30px}
+.capability-slide .bullets{list-style:none;padding:0;counter-reset:capability}
+.capability-slide .bullets li{display:grid;grid-template-columns:48px minmax(0,1fr);gap:18px;align-items:start;counter-increment:capability;padding:13px 0;border-bottom:1px solid var(--line)}
+.capability-slide .bullets li::before{content:counter(capability,decimal-leading-zero);font-size:16px;font-weight:750;line-height:1.5;color:var(--blue-dark);font-variant-numeric:tabular-nums}
+.process-slide .flow{position:relative;gap:0;margin-top:14px;border-top:1px solid var(--line)}
+.process-slide .step{background:transparent;border:0;border-radius:0;min-height:168px;padding:30px 26px 12px 0}
+.process-slide .step::before{content:"";position:absolute;top:-5px;left:0;width:9px;height:9px;background:var(--red)}
+.process-slide .step:not(:last-child)::after{right:18px;top:-5px;width:9px;height:9px;border-color:var(--red)}
+.process-slide .step i{font-size:31px;line-height:1;color:var(--red);font-variant-numeric:tabular-nums}
+.process-slide .step span{margin-top:22px;font-size:20px;line-height:1.45;color:var(--ink)}
+.metric{background:transparent;border:0;border-top:1px solid var(--line);border-radius:0;padding:26px 0}
+.metric strong{font-size:46px;line-height:1.1;color:var(--ink);font-variant-numeric:tabular-nums}
+.metric span{font-size:18px;color:var(--ink2)}
+.evidence-slide .visual{border:0;padding:0;background:transparent}
+.evidence-slide .visual .frame{border:1px solid var(--line);background:var(--tint)}
 .pair-problem,.pair-answer,.pain-card{border-radius:0;background:transparent;border:0;border-top:1px solid var(--line)}
 .pair-answer{border-top-color:var(--blue)}
+.pair-arrow{position:relative;font-size:0}
+.pair-arrow::before{content:"";position:absolute;left:4px;right:12px;top:50%;height:2px;background:var(--red)}
+.pair-arrow::after{content:"";position:absolute;right:10px;top:calc(50% - 5px);width:9px;height:9px;border-top:2px solid var(--red);border-right:2px solid var(--red);transform:rotate(45deg)}
 .closing h2{color:var(--hero-ink)}
 .closing p{color:var(--hero-muted)}
 ::selection{background:var(--blue);color:#fff}

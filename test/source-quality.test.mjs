@@ -55,7 +55,7 @@ test('模型回传代码或失败时不把原文摘录塞进方案正文', async
     new AbortController().signal, manifest, outline, [], { sales: true, stage: 'initial' })
   assert.equal(prompt.includes('display:flex'), false)
   assert.equal(JSON.stringify(result).includes('display:flex'), false)
-  assert.match(result[0].blocks[0].text, /原文不会直接作为方案正文/)
+  assert.match(result[0].blocks[0].text, /待与贵方确认：本部分内容将在进一步沟通并核对资料后完善/)
 })
 
 test('平台 Markdown 渲染入口剔除样式与损坏字符', () => {

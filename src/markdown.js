@@ -35,7 +35,7 @@ export function renderMarkdown(solution, assets) {
       pushBlock(lines, block, assetByName)
     }
   })
-  lines.push('---', '', `<sub>由万联智达内容中台生成 · ${solution.generatedAt}</sub>`, '')
+  if (meta.contact) lines.push('---', '', meta.contact, '')
   return lines.join('\n')
 }
 

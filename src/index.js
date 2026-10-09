@@ -24,6 +24,7 @@ import { documentToSolution, fetchDocument, generateSolution, knowledgeStatus, r
 import { loadPending, savePending } from './outline.js'
 import { painWithBasis } from './pain-basis.js'
 import { isSafeDisplayText } from './source-quality.js'
+import { customerFacingSolution } from './customer-copy.js'
 
 /** Cordis Loader 身份。 */
 export const name = 'wlyd-presales-solution'
@@ -332,7 +333,8 @@ const KIND_GUIDE = [
 ]
 
 const OUTLINE_INSTRUCTION = '请根据下方用户已确认的大纲生成售前解决方案；章节可以合并，但须保留客户问题与对应做法、能力依据和适用边界。'
-  + '每节给出 heading、lead 和有来源的正文；没有依据的内容标待确认，不要机械补齐十章，不要虚构事实。'
+  + '每节给出 heading、lead 和有来源的正文；标题、正文和结尾使用可直接给客户阅读的正式话语，不出现“本章”“模型生成”“请复核原文”等内部制作话语。'
+  + '没有依据的内容标“待与贵方确认”，不要机械补齐十章，不要虚构事实。'
 
 /**
  * 落盘方案的三份交付物与 .json 源,注册编辑器并返回统一输出结构。
@@ -707,7 +709,7 @@ export function apply(ctx, config) {
     },
     async execute(args, exec) {
       const signal = exec.signal
-      const solution = prepareSolution(normalizeSolution(args))
+      const solution = prepareSolution(customerFacingSolution(normalizeSolution(args)))
       const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
       const base = (nonEmpty(args.output_base) ? args.output_base.trim() : 'solution').replace(/\.(md|html|docx)$/i, '')
 
@@ -958,9 +960,9 @@ export function apply(ctx, config) {
       const signal = exec.signal
       const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
       const doc = await fetchDocument(cfg, { projectId: args.project_id.trim(), documentId: args.document_id.trim() })
-      const solution = prepareSolution(documentToSolution(doc, {
+      const solution = prepareSolution(customerFacingSolution(documentToSolution(doc, {
         theme: nonEmpty(args.theme) ? args.theme : 'corporate',
-      }))
+      })))
       const base = (nonEmpty(args.output_base) ? args.output_base.trim() : 'platform-solution').replace(/\.(md|html|docx)$/i, '')
       return persistSolution(ctx, exec, solution, {
         base, cwd, signal, assets: [], assetViews: [], warnings: [],

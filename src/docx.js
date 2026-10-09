@@ -72,7 +72,7 @@ export async function renderDocx(solution, assets) {
   children.push(new Paragraph({
     alignment: AlignmentType.CENTER,
     children: [new TextRun({
-      text: `万联智达内容中台生成 · ${solution.generatedAt.slice(0, 10)}${meta.contact ? ` · ${meta.contact}` : ''}`,
+      text: meta.contact || meta.company || '',
       color: '999999', size: 18,
     })],
   }))

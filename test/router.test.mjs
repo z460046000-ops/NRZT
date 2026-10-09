@@ -305,7 +305,7 @@ test('真实工具执行后得到可编辑源稿、预览和 Word 文件', async
   const html = await readFile(path.join(cwd, `${base}.html`), 'utf8')
   assert.match(html, /<!DOCTYPE html>/)
   assert.match(html, /class="pair-map"/)
-  assert.match(html, /P1 · 对应做法/)
+  assert.match(html, /P1 · 对应方案/)
   const structure = JSON.parse(await readFile(path.join(cwd, `${base}.json`), 'utf8'))
   assert.equal(structure.painSolutionLinks[0].id, 'P1')
   assert.equal(structure.sections.filter(section => section.kind === 'problem_solution').length, 1)
