@@ -1,0 +1,7 @@
+node_modules/
+presales-runs/
+analysis/
+*.log
+.DS_Store
+.env
+.env.*

@@ -1,0 +1,34 @@
+{
+  "name": "@wlyd/dsh-presales-solution",
+  "version": "0.8.1",
+  "description": "万联智达内容中台:材料导入分析 + 售前解决方案生成(集团模板幻灯片风格,DeepSeek Harness 路线B外挂插件)",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin/",
+    "guides/",
+    "skills/",
+    "src/",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "docx": "^9.9.0",
+    "image-size": "^2.0.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

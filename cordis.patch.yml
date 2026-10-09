@@ -1,0 +1,5 @@
+# @wlyd/dsh-presales-solution 自带挂载声明:任何 profile 安装本包即自动插入插件行。
+# 部署方如需覆盖本行 config 或禁用,在 profile 自己的 cordis.patch.yml 按 id 寻址。
+- insert:
+    - id: wlyd-presales-solution
+      name: '@wlyd/dsh-presales-solution'
