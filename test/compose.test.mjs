@@ -238,7 +238,9 @@ test('售前营销正文由模型归纳，技术接口目录不能覆盖客户�
   ] }
   const route = { options: { provider: 'mock', model: 'mock' } }
   let calls = 0
-  const ctx = { llm: { async *stream() {
+  const prompts = []
+  const ctx = { llm: { async *stream(options) {
+    prompts.push(options.system)
     const answer = calls++ === 0 ? { outline: [
       { heading: 'API 接口鉴权', topics: ['context'], sourcePaths: ['08-核心业务接口.md'] },
       { heading: '请求响应参数', topics: ['problem_solution'], sourcePaths: ['08-核心业务接口.md'] },
@@ -255,9 +257,12 @@ test('售前营销正文由模型归纳，技术接口目录不能覆盖客户�
   assert.equal(outline.length >= 4, true)
   assert.ok(outline.every(item => !/接口|参数|API/iu.test(item.heading)))
   assert.ok(outline.some(item => item.topics.includes('problem_solution')))
+  assert.match(prompts[0], /标题只讲一个判断/u)
   const sections = await composeSections(ctx, route, new AbortController().signal, manifest,
     [{ heading: 'CallWan 的营销价值', topics: ['capabilities'], sourcePaths: ['CallWan-产品介绍.md'] }],
     [], { sales: true, stage: 'initial' })
   assert.match(sections[0].blocks[0].text, /工作链路/)
   assert.match(sections[0].blocks[1].text, /来源：CallWan-产品介绍.md/)
+  assert.match(prompts[1], /每段以 1—2 个短句为主/u)
+  assert.match(prompts[1], /避免.*全链路闭环/u)
 })
