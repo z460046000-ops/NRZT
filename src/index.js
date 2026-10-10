@@ -17,7 +17,7 @@ import { classify, extractBinaryText, ingestMaterials } from './ingest.js'
 import { renderMarkdown } from './markdown.js'
 import { renderHtml } from './html.js'
 import { renderDocx } from './docx.js'
-import { materialSource, mentionsPresales, resultMessage, resumePresales, runPresales } from './router.js'
+import { directReplyIntent, materialSource, mentionsPresales, resultMessage, resumePresales, runPresales } from './router.js'
 import { prepareSolution, registerDocument, snapshotInitial } from './editor-store.js'
 import { registerEditorRoutes } from './editor-routes.js'
 import { documentToSolution, fetchDocument, generateSolution, knowledgeStatus, resolvePlatformConfig, setupProject, uploadProjectFile } from './platform.js'
@@ -503,6 +503,8 @@ export function apply(ctx, config) {
       if (pending) pendingDecision.set(agent, pending)
     }
     if (!mentionsPresales(text) && !awaitingMaterial.has(agent) && !pending) return decision
+    if (pending?.stage === 'draft-gaps' && !mentionsPresales(text)
+      && !['search', 'note', 'cancel'].includes(directReplyIntent('evidence', text))) return decision
 
     let agentRuns = processed.get(agent)
     if (!agentRuns) {

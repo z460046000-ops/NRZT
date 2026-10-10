@@ -166,6 +166,61 @@ test('列表项都是待确认文案时不把章节误判为有效正文', async
   assert.match(result.text, /只有 0\/2 章生成了有依据的正文/u)
 })
 
+test('有一章有据时先交付初稿，点名缺章并允许补充或公开检索生成新版', async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-presales-draft-gaps-'))
+  const source = '产品提供统一资料管理。内部代号保密X9。'
+  const outline = [
+    { heading: '产品能力', topics: ['capabilities'], sourcePaths: ['CallWan-产品介绍.md'] },
+    { heading: '典型场景', topics: ['scenarios'], sourcePaths: ['CallWan-产品介绍.md'] },
+  ]
+  const calls = []
+  const ctx = {
+    fs: { async resolve(file, options) { return path.resolve(options.cwd, file) },
+      async writeText(target, content) { await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, content) } },
+    llm: { async *stream(options) {
+      let answer = {}
+      if (options.system.includes('售前材料证据审查员')) answer = { decision: 'ask', question: '客户场景待确认' }
+      else if (options.system.includes('售前方案撰写员')) {
+        const input = JSON.parse(options.messages[0].content[0].text)
+        answer = { sections: input.outline.map((item, index) => ({ heading: item.heading,
+          blocks: index === 0 ? [{ type: 'para', text: '产品帮助团队统一管理资料。',
+            path: 'CallWan-产品介绍.md', quote: '产品提供统一资料管理' }] : [] })) }
+      } else if (options.system.includes('只写售前方案')) answer = { blocks: [] }
+      yield { type: 'text-delta', text: JSON.stringify(answer) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } },
+    tools: { async execute(input) {
+      calls.push(input)
+      if (input.name === 'web_search') return { isError: false, value: { sources: [
+        { url: 'https://example.com/industry', snippet: '企业资料协作经常需要统一版本。' },
+      ] } }
+      assert.equal(input.name, 'wlyd_solution')
+      return { isError: false, value: { editUrl: 'http://localhost/solution.html',
+        markdownPath: 'solution.md', docxPath: 'solution.docx' } }
+    } },
+  }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
+  const signal = new AbortController().signal
+  const initial = await resumePresales(ctx, agent, signal, { stage: 'outline', runId: 'draft-run',
+    manifest: { label: 'CallWan', counts: { extracted: 1 }, files: [
+      { path: 'CallWan-产品介绍.md', excerpt: source },
+    ] }, outline, links: [], auto: true, stageType: 'initial' }, '确认大纲')
+  assert.equal(initial.kind, 'success')
+  assert.equal(initial.pending.stage, 'draft-gaps')
+  assert.deepEqual(initial.pending.missing, ['典型场景'])
+  assert.match(initial.text, /搜索公开资料/u)
+  const searched = await resumePresales(ctx, agent, signal, initial.pending, '搜索公开资料')
+  assert.equal(searched.kind, 'success')
+  const query = calls.find(call => call.name === 'web_search').arguments.queries[0]
+  assert.doesNotMatch(query, /保密X9|产品提供统一资料管理/u)
+  assert.ok(searched.pending.manifest.files.some(file => file.kind === 'public'))
+  const supplemented = await resumePresales(ctx, agent, signal, initial.pending,
+    '补充：目标客户是需要统一资料版本的小型团队，当前流程由客户确认。')
+  assert.equal(supplemented.kind, 'success')
+  assert.ok(supplemented.pending.manifest.files.some(file => file.kind === 'user'))
+  assert.notEqual(supplemented.pending.runId, initial.pending.runId)
+})
+
 test('自然语言路由和命令均经插件按导入、方案顺序执行', async () => {
   const calls = []
   const events = new Map()

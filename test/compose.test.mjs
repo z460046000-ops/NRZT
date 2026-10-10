@@ -1,6 +1,37 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { composeSections, outlineFromMaterials } from '../src/content.js'
+import { salesOutlineCandidate, salesScenario } from '../src/sales.js'
+
+test('按材料区分增长与协同叙事，公开摘要不能作为产品能力章来源', () => {
+  const collaboration = { files: [{ path: 'CallWan AI 企业协同工作台解决方案.pdf', excerpt: '人机协作。' }] }
+  assert.equal(salesScenario(collaboration), 'collaboration')
+  assert.match(salesOutlineCandidate(collaboration, 'CallWan', 'initial')[3].heading, /协同场景/u)
+  const growth = { files: [
+    { path: 'CallWan-AI企业增长平台解决方案.html', excerpt: '内容生产与线索承接。' },
+    { path: '公开资料（待核实）[1] https://example.com', excerpt: '行业营销趋势。', kind: 'public' },
+  ] }
+  const outline = salesOutlineCandidate(growth, 'CallWan', 'initial')
+  assert.equal(salesScenario(growth), 'growth')
+  assert.ok(outline[1].sourcePaths.some(value => value.startsWith('公开资料')))
+  assert.ok(outline[2].sourcePaths.every(value => !value.startsWith('公开资料')))
+})
+
+test('模型把公开摘要写成产品能力时由代码拒绝', async () => {
+  const sourcePath = '公开资料（待核实）[1] https://example.com'
+  const excerpt = '某行业企业采用统一资料管理。'
+  const manifest = { files: [{ path: sourcePath, excerpt, kind: 'public' }] }
+  const outline = [{ heading: '产品能力', topics: ['capabilities'], sourcePaths: [sourcePath] }]
+  const ctx = { llm: { async *stream() {
+    yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '产品能力', blocks: [
+      { type: 'para', text: 'CallWan 提供统一资料管理。', path: sourcePath, quote: excerpt },
+    ] }] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [], { sales: true })
+  assert.match(sections[0].blocks[0].text, /待与贵方确认/u)
+})
 
 test('确认大纲后只接受有原文依据且属于该章来源的段落', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: '客户资料分散。产品统一管理资料。' }] }
@@ -159,6 +190,28 @@ test('路由误报关闭思考能力时只重试一次默认参数', async () =>
   assert.equal(requests[0].reasoningEffort, 'off')
   assert.equal('reasoningEffort' in requests[1], false)
   assert.match(result[0].blocks[0].text, /统一管理资料/u)
+})
+
+test('单章重试能读取长材料靠后的场景依据', async () => {
+  const late = '典型场景：销售在项目内查看线索来源，并按负责人完成跟进。'
+  const manifest = { files: [{ path: 'CallWan-产品介绍.md', excerpt: `${'增长趋势描述。'.repeat(1700)}\n${late}` }] }
+  const outline = [{ heading: '营销场景与落地方式', topics: ['scenarios'], sourcePaths: ['CallWan-产品介绍.md'] }]
+  let sawLate = false
+  const ctx = { llm: { async *stream(options) {
+    if (options.system.includes('售前方案撰写员')) {
+      yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      return
+    }
+    const input = JSON.parse(options.messages[0].content[0].text)
+    sawLate = input.sources[0].content.includes(late)
+    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
+      text: '销售可以按来源和负责人跟进项目线索。', sourceId: 'S1', quote: late }] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const result = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [], { sales: true })
+  assert.equal(sawLate, true)
+  assert.match(result[0].blocks[0].text, /项目线索/u)
 })
 
 test('证据未能确认痛点时仍可由模型提出材料化大纲', async () => {

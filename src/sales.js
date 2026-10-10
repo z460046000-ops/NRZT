@@ -1,6 +1,6 @@
 /** 售前请求与资料角色识别。技术资料可作能力依据，但不能决定客户版目录。 */
 const TECHNICAL = /接口|swagger|openapi|api(?:\b|[-_])|开发文档|参数|状态码|请求响应|调试|样式表/iu
-const MARKET = /营销|增长|获客|客户|场景|解决方案|产品介绍|能力清单|公司介绍|集团简介|品牌/iu
+const MARKET = /营销|增长|获客|客户|场景|解决方案|产品介绍|能力清单|公司介绍|集团简介|品牌|协同|工作台|数字员工/iu
 
 export function salesRequest(text) {
   const marker = text.indexOf('售前解决方案')
@@ -25,20 +25,32 @@ export function technicalHeading(heading) {
   return TECHNICAL.test(heading) || /\b(?:html|css)\b/iu.test(heading)
 }
 
+/** 手工方案的增长与协同叙事不同，优先依据材料标题判断，避免把协同产品写成营销平台。 */
+export function salesScenario(manifest) {
+  const files = [...(manifest.files ?? [])].filter(file => file.kind !== 'public' && file.kind !== 'user')
+    .sort((a, b) => sourcePriority(b) - sourcePriority(a))
+  const names = files.slice(0, 3).map(file => file.path.split('/').at(-1)).join(' ')
+  return /协同|工作台|数字员工/iu.test(names) && !/增长|营销获客/iu.test(names)
+    ? 'collaboration' : 'growth'
+}
+
 export function salesOutlineCandidate(manifest, product, stage) {
   const files = [...(manifest.files ?? [])].filter(file => file.excerpt?.trim())
     .sort((a, b) => sourcePriority(b) - sourcePriority(a))
-  const business = files.filter(file => sourcePriority(file) >= 0).map(file => file.path)
-  const all = files.map(file => file.path)
-  const company = files.filter(file => sourcePriority(file) >= 0
+  const business = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0).map(file => file.path)
+  const all = files.filter(file => file.kind !== 'public').map(file => file.path)
+  const company = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0
     && /公司介绍|集团简介|企业介绍|服务保障|资质/u.test(`${file.path} ${file.excerpt}`))
     .map(file => file.path)
+  const publicPaths = (manifest.files ?? []).filter(file => file.kind === 'public').map(file => file.path)
+  const scenario = salesScenario(manifest)
   const result = [
-    { heading: '业务背景与机会', topics: ['context'], sourcePaths: business.slice(0, 3) },
+    { heading: '业务背景与机会', topics: ['context'], sourcePaths: [...business.slice(0, 2), ...publicPaths.slice(0, 1)] },
     { heading: stage === 'deep' ? '客户现状与关键问题（待确认）' : '目标客户与典型挑战（待确认）',
-      topics: ['problem_solution'], sourcePaths: business.slice(0, 3) },
+      topics: ['problem_solution'], sourcePaths: [...business.slice(0, 2), ...publicPaths.slice(0, 1)] },
     { heading: `${product}的解决思路与业务价值`, topics: ['capabilities'], sourcePaths: all.slice(0, 4) },
-    { heading: '营销场景与落地方式', topics: ['scenarios', 'implementation'], sourcePaths: all.slice(0, 4) },
+    { heading: scenario === 'collaboration' ? '协同场景与落地方式' : '营销场景与落地方式',
+      topics: ['scenarios', 'implementation'], sourcePaths: all.slice(0, 4) },
   ]
   if (company.length) result.push({ heading: '企业背景与服务支持', topics: ['company', 'service'], sourcePaths: company.slice(0, 3) })
   return result

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { sectionsFromOutline, suggestOutline } from './outline.js'
-import { salesOutlineCandidate, sourcePriority, technicalHeading } from './sales.js'
+import { salesOutlineCandidate, salesScenario, sourcePriority, technicalHeading } from './sales.js'
 import { normalizeChart } from './chart.js'
 import { cleanMaterialText, isReadableProse } from './source-quality.js'
 import { hasInternalCopy } from './customer-copy.js'
@@ -33,6 +33,30 @@ async function readSources(ctx, agent, signal, manifest) {
   } catch {
     return sourcesFromCorpus('', manifest)
   }
+}
+
+/** 单章重试优先给相关原文行，保留原句以便模型逐字引用。 */
+function sectionSourceExcerpt(content, item) {
+  const hints = [item.heading, ...(item.topics ?? [])].join(' ')
+  const pattern = /挑战|痛点|问题|客户|典型/u.test(hints) ? /挑战|痛点|问题|客户|线索|协同|负担|割裂|效率/u
+    : /场景|实施|落地|路径/u.test(hints) ? /场景|实施|落地|路径|流程|步骤|服务|试点/u
+      : /公司|服务|保障/u.test(hints) ? /公司|集团|服务|保障|培训|资质/u
+        : /能力|方案|价值/u.test(hints) ? /能力|方案|价值|功能|平台|链路/u : /背景|趋势|机会|现状/u
+  const lines = content.split('\n').filter(Boolean)
+  const selected = new Set()
+  for (let i = 0; i < lines.length; i++) {
+    if (!pattern.test(lines[i])) continue
+    for (let j = i; j <= Math.min(i + 2, lines.length - 1); j++) selected.add(j)
+  }
+  const relevant = [...selected].sort((a, b) => a - b).map(index => lines[index]).join('\n').slice(0, 4_500)
+  return `${content.slice(0, 2_000)}\n${relevant}`.slice(0, 7_000)
+}
+
+function sectionEvidencePaths(item, manifest) {
+  const paths = item.sourcePaths ?? []
+  if (!(item.topics ?? []).some(topic => ['capabilities', 'scenarios', 'implementation', 'service', 'company', 'architecture'].includes(topic))) return paths
+  const publicPaths = new Set((manifest.files ?? []).filter(file => file.kind === 'public').map(file => file.path))
+  return paths.filter(sourcePath => !publicPaths.has(sourcePath))
 }
 
 function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases = new Map()) {
@@ -133,14 +157,15 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     limited.push({ path: sourcePath, content: content.slice(0, budget) })
     budget -= content.length
   }
-  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。`
+  const scenario = salesScenario(manifest)
+  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。借鉴人工售前写法：先讲背景和目标客户的典型挑战，再逐项说明对应做法、业务链路、平台支撑、场景及实施边界；痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的事实在未核实前标明待确认。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。`
   const sections = [...fallback]
   try {
     const reply = await askForJson(ctx, agent, signal, system,
       { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }, 20_000)
     if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
       for (const [index, candidate] of reply.value.sections.entries()) {
-        sections[index] = sectionFromCandidate(candidate, fallback[index], outline[index].sourcePaths ?? [], sources)
+        sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources)
       }
     } else issues.push(reply.issue ?? 'invalid_sections')
   } catch (error) {
@@ -149,9 +174,9 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
   }
   for (const [index, item] of outline.entries()) {
     if (sections[index] !== fallback[index]) continue
-    const relevant = [...new Set(item.sourcePaths ?? [])].filter(sourcePath => sources.has(sourcePath))
+    const relevant = [...new Set(sectionEvidencePaths(item, manifest))].filter(sourcePath => sources.has(sourcePath))
       .slice(0, 4).map((sourcePath, position) => ({ id: `S${position + 1}`,
-        name: sourcePath.split('/').at(-1), content: sources.get(sourcePath).slice(0, 7000), path: sourcePath }))
+        name: sourcePath.split('/').at(-1), content: sectionSourceExcerpt(sources.get(sourcePath), item), path: sourcePath }))
     if (!relevant.length) continue
     const aliases = new Map(relevant.map(source => [source.id, source.path]))
     try {
@@ -159,7 +184,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
         `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。`,
         { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 6_000)
       const candidate = reply.value?.section ?? reply.value
-      sections[index] = sectionFromCandidate(candidate, fallback[index], item.sourcePaths ?? [], sources, aliases)
+      sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)
       if (sections[index] === fallback[index]) issues.push(reply.issue ?? 'unverified_content')
     } catch (error) {
       if (signal?.aborted) throw error
@@ -185,7 +210,7 @@ export async function outlineFromMaterials(ctx, agent, signal, manifest, setting
     for await (const chunk of ctx.llm.stream({
       provider: route.provider, model: route.model,
       system: settings.sales
-        ? `你为${settings.product}设计面向客户的营销场景售前方案大纲，接触阶段：${settings.stage === 'deep' ? '深入接触' : '初次接触'}。仅输出 JSON：{"outline":[{"heading":"客户能理解的章节标题","topics":["context|problem_solution|capabilities|scenarios|implementation|service|company|boundary|custom"],"sourcePaths":["输入中的材料路径"]}]}。建议 3—6 章，叙事主线是业务背景→目标客户或已知客户的问题→逐项回应的产品方案→场景/实施→有依据的企业介绍；可按材料增减、合并，不固定章数。初次接触不能把行业问题写成该客户事实，深入接触也只能采用已提供的客户事实。接口文档只用于核对产品能力，绝不能用 API、Swagger、认证、请求响应、文档解析等技术目录当章标题。资料不足的章标待确认；公司介绍无材料可省略。sourcePaths 只能引用输入中的路径。只输出 JSON。`
+        ? `你为${settings.product}设计面向客户的${salesScenario(manifest) === 'growth' ? '企业增长/营销' : '企业协同'}售前方案大纲，接触阶段：${settings.stage === 'deep' ? '深入接触' : '初次接触'}。仅输出 JSON：{"outline":[{"heading":"客户能理解的章节标题","topics":["context|problem_solution|capabilities|scenarios|implementation|service|company|boundary|custom"],"sourcePaths":["输入中的材料路径"]}]}。建议 3—6 章，叙事主线是业务背景→目标客户或已知客户的问题→逐项回应的产品方案→场景/实施→有依据的企业介绍；可按材料增减、合并，不固定章数。增长材料聚焦营销链路、线索和数据回流；协同材料聚焦人机协作、真实场景与当前阶段，不混用两条产品线的能力。初次接触不能把行业问题写成该客户事实，深入接触也只能采用已提供的客户事实。接口文档只用于核对产品能力，绝不能用 API、Swagger、认证、请求响应、文档解析等技术目录当章标题。资料不足的章标待确认；公司介绍无材料可省略。公开资料只能作为背景和典型问题的来源，不能进入产品能力章。sourcePaths 只能引用输入中的路径。只输出 JSON。`
         : '你只为售前方案设计材料驱动的大纲，不判断客户痛点是否已发生。仅输出 JSON：{"outline":[{"heading":"体现材料具体业务或能力的章节标题","topics":["context|capabilities|architecture|scenarios|implementation|service|boundary|company|custom"],"sourcePaths":["输入中的材料路径"]}]}。根据实际信息给 3—6 章，章节标题具体、彼此不重复；不能用“项目背景与目标”“产品能力与适用场景”等通用模板凑数。没有客户问题依据时，不建立客户问题与方案章，可在边界章提示尚待确认。sourcePaths 只能引用输入中的路径。只输出 JSON。',
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ sources: limited }) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],

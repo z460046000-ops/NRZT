@@ -64,21 +64,21 @@ async function generateDraft(ctx, agent, signal, pending, links) {
     pending.auto ? { sales: true, stage: pending.stageType } : {})
   const substantive = value => typeof value === 'string' && value.trim()
     && !/^(?:待与贵方确认|待补充并确认|尚无证据|本部分内容将在)/u.test(value.trim())
-  const filled = sections.filter(section => (section.kind === 'problem_solution' && links.length)
-    || section.blocks.some(block => {
+  const isFilled = section => section.blocks.some(block => {
       const lines = block.type === 'para' ? [block.text]
         : ['bullets', 'steps'].includes(block.type) ? block.items : []
       return block.type === 'chart' && block.points?.length >= 2 || lines?.some(substantive)
-    })).length
-  const required = Math.ceil(sections.length / 2)
-  if (filled < required) {
+    })
+  const filled = sections.filter(isFilled).length
+  const missing = sections.filter(section => !isFilled(section)).map(section => section.heading)
+  if (filled === 0) {
     const issues = sections.generationIssues ?? []
     const reason = issues.includes('model_unavailable') ? '当前会话没有可用的生成模型'
       : issues.includes('no_readable_source') ? '导入资料中没有可用正文'
         : issues.includes('max-tokens') ? '模型输出被截断'
           : issues.includes('model_error') ? '模型调用失败'
             : '模型正文或引用未通过校验'
-    return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 ${filled}/${sections.length} 章生成了有依据的正文，未达到交付要求，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
+    return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 0/${sections.length} 章生成了有依据的正文，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
   }
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
@@ -109,7 +109,9 @@ async function generateDraft(ctx, agent, signal, pending, links) {
     kind: 'success',
     text: `## ${manifest.label}售前解决方案\n\n${pending.auto ? `已自动检索资料，按${pending.stageType === 'deep' ? '深入接触' : '初次接触'}场景生成初稿；可继续补充客户信息或直接编辑。${pending.sourceSummary ? `\n\n**资料来源**：${pending.sourceSummary}` : ''}` : '已按确认大纲生成初稿，请先预览和复核。'}\n\n${delivery}\n\n**内容结构** · ${sections.length} 章\n\n${sections.map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
       + (links.length ? `**证据状态**：${links.length} 组问题与做法已逐项对应，仍需人工复核后使用。`
-        : '**证据状态**：客户问题与做法尚无可靠对应关系，相关内容待确认，暂不作为完整方案对外使用。'),
+        : '**证据状态**：客户问题与做法尚无可靠对应关系，相关内容待确认，暂不作为完整方案对外使用。')
+      + (missing.length ? `\n\n**本版仍需补充**：${missing.join('、')}。这是一份可继续编辑的初稿，含待确认内容，不能直接外发。你可以在输入框补充目标客户、实际问题、场景或产品已验证能力；也可以回复“搜索公开资料”，让我只补行业背景与典型问题。补充后会另存新版。` : ''),
+    ...(missing.length ? { pending: { ...pending, stage: 'draft-gaps', missing } } : {}),
   }
 }
 
@@ -293,11 +295,11 @@ async function autoKnowledgeBase(config, product) {
     }) : []).sort((a, b) => b.score - a.score)
 }
 
-async function publicProductManifest(ctx, agent, signal, product, runId) {
+async function publicProductManifest(ctx, agent, signal, product, runId, query = `${product} 产品 营销 解决方案 官网`) {
   let searched
   try {
     searched = await ctx.tools.execute({ callId: randomUUID(), name: 'web_search',
-      arguments: { queries: [`${product} 产品 营销 解决方案 官网`] }, agent, signal })
+      arguments: { queries: [query] }, agent, signal })
   } catch (error) {
     if (signal?.aborted) throw error
     return undefined
@@ -539,6 +541,29 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
       return { kind: 'question', text: `请回复编号选择知识库：\n${menu}\n回复“取消”退出。`, pending }
     }
     return pullFromKnowledgeBase(ctx, agent, signal, config, picked, pending.runId)
+  }
+  if (pending.stage === 'draft-gaps') {
+    const runId = `presales-runs/${Date.now()}-${randomUUID().slice(0, 8)}`
+    let additions
+    let sourceSummary
+    if (SEARCH_HINT.test(text) && !NEGATION.test(text)) {
+      const found = await publicProductManifest(ctx, agent, signal, pending.manifest.label, runId,
+        safePublicQuery(pending.manifest))
+      if (!found) return { kind: 'question', text: '公开检索没有返回可用资料。可以直接补充客户场景或已验证的产品能力；现有初稿仍可编辑。', pending }
+      additions = found.files
+      sourceSummary = `${pending.sourceSummary ?? '已有资料'}；公开行业资料（待核实）`
+    } else {
+      const note = text.replace(/^(?:补充|说明)\s*[:：]\s*/u, '').trim()
+      if (note.length < 8 || note.length > 4_000 || /[？?]$/u.test(note)) {
+        return { kind: 'question', text: `请补充「${(pending.missing ?? []).join('、')}」相关的客户场景、实际问题或已验证产品能力；也可以回复“搜索公开资料”。现有初稿仍可编辑。`, pending }
+      }
+      additions = [{ path: `${runId}/客户补充（待确认）.md`, kind: 'user', excerpt: note }]
+      sourceSummary = `${pending.sourceSummary ?? '已有资料'}；用户本轮补充（待确认）`
+    }
+    const manifest = { ...pending.manifest, files: [...(pending.manifest.files ?? []), ...additions],
+      counts: { ...pending.manifest.counts, extracted: (pending.manifest.counts?.extracted ?? 0) + additions.length } }
+    return generateSalesDraft(ctx, agent, signal, manifest, runId,
+      { product: pending.manifest.label, stage: pending.stageType ?? 'initial', sourceSummary })
   }
   if (pending.stage === 'generating') {
     if (text !== '重试生成') return { kind: 'question', text: '上次确认后正在生成或因重启中断。请先检查该次输出目录；如需恢复，回复“重试生成”。', pending }
