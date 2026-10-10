@@ -28,3 +28,21 @@ test('长内容拆页且保留文字，标题层级与视口安全规则存在',
   assert.match(html, /<section class="slide toc-slide">/u)
   assert.match(html, /cover-geometry/u)
 })
+
+test('长段落不走大字主张页，渲染器提供有区别的稳定构图', () => {
+  const solution = { title: '客户增长方案', theme: 'corporate', meta: {}, sections: [
+    { kind: 'trends', heading: '增长链路的变化正在影响客户触达与销售跟进', blocks: [
+      { type: 'para', text: '企业需要把内容投放、客户互动、销售线索和后续跟进放在同一条业务流程中观察。'.repeat(2) },
+      { type: 'quote', text: '来源：growth.md\\n渠道触点与线索跟进记录应当可追溯' },
+    ] },
+    { kind: 'implementation', heading: '从内容到线索的业务流程', blocks: [
+      { type: 'steps', items: ['整理内容', '选择渠道', '记录互动', '跟进线索'] },
+    ] },
+  ] }
+  const html = renderHtml(solution, [])
+  assert.doesNotMatch(html, /statement-slide[^>]*增长链路/u)
+  assert.match(html, /layout-editorial-(?:left|right|led)/u)
+  assert.match(html, /layout-process-(?:horizontal|right|staggered)/u)
+  assert.match(html, /statement-center/u)
+  assert.match(html, /editorial-led \.body/u)
+})

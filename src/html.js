@@ -271,22 +271,43 @@ function dividerSlide(solution, section, no, t) {
 </section>`
 }
 
-function layoutFor(solution, section, blocks, pageIndex, previous) {
+function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
+  const leadText = blocks.find(block => block.type === 'para')?.text ?? ''
   const family = types.includes('chart') ? 'chart'
     : types.includes('steps') ? 'process'
       : types.includes('image') ? 'evidence'
-        : blocks.length <= 2 && blocks[0]?.type === 'para' && String(blocks[0].text).length <= 190 ? 'statement'
+        : blocks.length <= 2 && blocks[0]?.type === 'para' && String(leadText).length <= 92 ? 'statement'
           : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
-  const variants = family === 'chart' ? ['chart-wide'] : [`${family}-left`, `${family}-right`]
+  const variants = family === 'chart' ? ['chart-wide'] : ({
+    statement: ['statement-left', 'statement-right', 'statement-center'],
+    process: ['process-horizontal', 'process-right', 'process-staggered'],
+    evidence: ['evidence-left', 'evidence-right', 'evidence-full'],
+    capability: ['capability-left', 'capability-right', 'capability-band'],
+    editorial: ['editorial-left', 'editorial-right', 'editorial-led'],
+  })[family]
   const seed = [...`${solution.title}:${section.heading}:${pageIndex}`].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
-  const choice = variants[seed % variants.length]
-  return choice === previous && variants.length > 1 ? variants.find(item => item !== choice) : choice
+  const notes = blocks.filter(block => block.type === 'quote' && block.text.startsWith('来源：')).length
+  const stepCount = blocks.filter(block => block.type === 'steps').reduce((count, block) => count + block.items.length, 0)
+  const bulletItems = blocks.flatMap(block => block.kind === 'cards'
+    ? block.items.filter(item => item.type === 'bullets').flatMap(item => item.items)
+    : block.type === 'bullets' ? block.items : [])
+  const dense = bulletItems.length >= 5 || bulletItems.some(item => String(item).length > 56)
+  const preferred = family === 'statement' && notes === 0 ? 'statement-center'
+    : family === 'process' && stepCount >= 4 ? 'process-staggered'
+      : family === 'process' && stepCount <= 2 ? 'process-right'
+        : family === 'evidence' && notes === 0 ? 'evidence-full'
+          : family === 'capability' && dense ? 'capability-right'
+            : family === 'capability' && bulletItems.length >= 2 && bulletItems.length <= 4 ? 'capability-band'
+              : family === 'editorial' && String(leadText).length > 180 && blocks.length > 1 ? 'editorial-led' : undefined
+  const usable = variants.filter(item => !recentLayouts.includes(item))
+  const candidates = usable.length ? usable : variants
+  return preferred && candidates.includes(preferred) ? preferred : candidates[seed % candidates.length]
 }
 
 function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features, layout) {
   const statement = blocks.length <= 2 && blocks[0]?.type === 'para'
-    && String(blocks[0].text).length <= 190
+    && String(blocks[0].text).length <= 92
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
   const body = blocks.map(group => {
     if (group.kind === 'cards') {
@@ -296,7 +317,8 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   }).join('\n')
   const gap = blocks.length > 1 ? ' style="gap:20px"' : ''
   const tag = solution.meta.product ?? solution.title
-  const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
+  const headingSize = section.heading.length > 42 ? 26 : section.heading.length > 30 ? 30
+    : section.heading.length > 20 ? 34 : 40
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const visual = types.includes('steps') ? ' process-slide' : types.includes('image') ? ' evidence-slide'
     : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? ' capability-slide' : ''
@@ -369,7 +391,7 @@ export function renderHtml(solution, assets, options = {}) {
     slides.push(tocSlide(solution, solution.sections.slice(i, i + 6), i))
   }
   let contentPages = 0
-  let previousLayout = ''
+  const recentLayouts = []
   solution.sections.forEach((section, i) => {
     slides.push(dividerSlide(solution, section, i + 1, t))
     if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
@@ -380,8 +402,9 @@ export function renderHtml(solution, assets, options = {}) {
     }
     for (const pageBlocks of paginateBlocks(section.blocks)) {
       contentPages += 1
-      const layout = layoutFor(solution, section, pageBlocks, contentPages, previousLayout)
-      previousLayout = layout
+      const layout = layoutFor(solution, section, pageBlocks, contentPages, recentLayouts)
+      recentLayouts.push(layout)
+      if (recentLayouts.length > 2) recentLayouts.shift()
       slides.push(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout))
     }
   })
@@ -688,21 +711,50 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .layout-statement-right .body>.para{grid-column:2;grid-row:1}
 .layout-statement-right .body>.source-note{grid-column:1;grid-row:1}
 .layout-statement-right .body:has(> :only-child)>.para{grid-column:1 / -1}
+.layout-statement-center .head{text-align:center}
+.layout-statement-center .head h2,.layout-statement-center .head .lead{margin-left:auto;margin-right:auto}
+.layout-statement-center .head::after{margin-left:auto;margin-right:auto}
+.layout-statement-center .body{align-items:center;justify-content:center}
+.layout-statement-center .para{text-align:center;max-width:820px}
 .layout-process-right .flow{display:grid!important;grid-template-columns:1fr!important;border-top:0;margin:0;gap:0}
 .layout-process-right .flow::before{content:"";position:absolute;left:22px;top:32px;bottom:32px;width:1px;background:var(--line)}
 .layout-process-right .step{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;min-height:0;padding:14px 0;border-bottom:1px solid var(--line)}
 .layout-process-right .step::before,.layout-process-right .step::after{display:none}
 .layout-process-right .step i{position:relative;z-index:1;width:45px;height:45px;display:grid;place-items:center;background:var(--slide);border:1px solid var(--red);border-radius:50%;font-size:17px}
 .layout-process-right .step span{margin:0;font-size:19px}
+.layout-process-staggered .flow{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px 48px;border-top:0}
+.layout-process-staggered .step{min-height:0;padding:18px 0 18px 62px;border-top:1px solid var(--line)}
+.layout-process-staggered .step::before{display:none}
+.layout-process-staggered .step:not(:last-child)::after{display:none}
+.layout-process-staggered .step i{position:absolute;left:0;top:18px;font-size:18px}
+.layout-process-staggered .step span{margin:0;font-size:18px}
 .layout-capability-left .body .card .bullets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 36px;align-content:start}
 .layout-capability-left .body .card .bullets li{display:block;padding:18px 0;border-top:1px solid var(--line);border-bottom:0;font-size:20px}
 .layout-capability-left .body .card .bullets li::before{display:block;margin-bottom:12px}
 .layout-capability-right .body>.grid{grid-template-columns:1fr!important;gap:4px}
 .layout-capability-right .card{padding:6px 0 16px}
+.layout-capability-band .body>.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 44px}
+.layout-capability-band .body>.grid .card{align-self:start;border-top:2px solid var(--blue);padding:18px 0;background:transparent}
+.layout-capability-band .body>.grid .card:nth-child(2n){border-top-color:var(--red)}
+.layout-capability-band .body .bullets li{font-size:18px;line-height:1.52}
 .layout-editorial-right .body{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,.75fr);align-content:start;gap:24px 44px}
 .layout-editorial-right .body>.source-note{grid-column:2;align-self:start}
 .layout-editorial-right .body>.grid,.layout-editorial-right .body>.table{grid-column:1 / -1}
 .layout-editorial-right .body>.para{grid-column:1}
+.layout-editorial-led .body{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));align-content:start;gap:18px 28px}
+.layout-editorial-led .body>.para:first-child{grid-column:1 / -1;max-width:1050px;font-size:25px;line-height:1.5;color:var(--ink);font-weight:600}
+.layout-editorial-led .body>.source-note{grid-column:1 / 5;align-self:start}
+.layout-editorial-led .body>.para:not(:first-child),.layout-editorial-led .body>.card{grid-column:5 / -1}
+.layout-editorial-led .body>.table,.layout-editorial-led .body>.visual,.layout-editorial-led .body>.flow{grid-column:1 / -1}
+.layout-evidence-left .body,.layout-evidence-right .body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);align-items:center;gap:36px}
+.layout-evidence-left .body>.visual{grid-column:1;grid-row:1 / span 3}
+.layout-evidence-left .body>.source-note{grid-column:2}
+.layout-evidence-right .body{grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr)}
+.layout-evidence-right .body>.visual{grid-column:2;grid-row:1 / span 3}
+.layout-evidence-right .body>.source-note{grid-column:1}
+.layout-evidence-full .body{display:grid;grid-template-rows:minmax(0,1fr) auto;justify-items:center;gap:14px}
+.layout-evidence-full .body>.visual{height:100%;width:min(100%,1040px)}
+.layout-evidence-full .body>.visual .frame{height:100%}
 .pair-stacked .pair-map{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:20px}
 .pair-stacked .pair-arrow{display:none}
 .pair-stacked .pair-problem,.pair-stacked .pair-answer{padding:16px 28px}

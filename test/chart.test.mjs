@@ -59,14 +59,15 @@ test('外部稿保留图表数值但不泄露内部文件路径和引文', async
   }
 })
 
-test('同类能力页在一份方案中出现不同构图，重渲染保持稳定', () => {
+test('同类能力页使用多种构图且重渲染保持稳定', () => {
   const solution = { title: '售前业务方案', theme: 'corporate', meta: {},
     sections: Array.from({ length: 8 }, (_, index) => ({ kind: 'capabilities', heading: `能力 ${index + 1}`,
       blocks: [{ type: 'bullets', items: ['资料管理', '协作交付'] }] })) }
   const html = renderHtml(solution, [])
-  const layouts = [...html.matchAll(/class="slide content-slide[^"\n]*layout-(capability-left|capability-right)"/gu)]
+  const layouts = [...html.matchAll(/class="slide content-slide[^"\n]*layout-(capability-left|capability-right|capability-band)"/gu)]
     .map(match => match[1])
   assert.equal(layouts.length, 8)
-  assert.equal(new Set(layouts).size, 2)
+  assert.ok(new Set(layouts).size >= 3)
+  assert.ok(layouts.every((layout, index) => index === 0 || layout !== layouts[index - 1]))
   assert.equal(renderHtml(solution, []), html)
 })
