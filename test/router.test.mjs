@@ -141,6 +141,31 @@ test('四章只有占位文案时不生成幻灯片，并说明正文生成失�
   assert.deepEqual(calls, ['wlyd_ingest'])
 })
 
+test('列表项都是待确认文案时不把章节误判为有效正文', async () => {
+  const source = '产品提供统一资料管理。'
+  const outline = [
+    { heading: '产品能力', topics: ['capabilities'], sourcePaths: ['product.md'] },
+    { heading: '使用场景', topics: ['scenarios'], sourcePaths: ['product.md'] },
+  ]
+  const ctx = {
+    llm: { async *stream() {
+      yield { type: 'text-delta', text: JSON.stringify({ sections: outline.map(item => ({ heading: item.heading,
+        blocks: [{ type: 'bullets', items: [
+          '待与贵方确认：本部分内容将在进一步沟通后完善。',
+          '待补充并确认：当前没有可核实的具体内容。',
+        ], path: 'product.md', quote: source }] })) }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } },
+    tools: { async execute() { throw new Error('占位列表不得调用 wlyd_solution') } },
+  }
+  const pending = { stage: 'outline', manifest: { label: 'CallWan', counts: { extracted: 1 },
+    files: [{ path: 'product.md', excerpt: source }] }, outline, links: [], runId: 'test-placeholder-bullets' }
+  const result = await resumePresales(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, pending, '确认大纲')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /只有 0\/2 章生成了有依据的正文/u)
+})
+
 test('自然语言路由和命令均经插件按导入、方案顺序执行', async () => {
   const calls = []
   const events = new Map()

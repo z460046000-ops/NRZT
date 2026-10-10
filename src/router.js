@@ -62,10 +62,14 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const { manifest, runId } = pending
   const sections = await composeSections(ctx, agent, signal, manifest, pending.outline, links,
     pending.auto ? { sales: true, stage: pending.stageType } : {})
+  const substantive = value => typeof value === 'string' && value.trim()
+    && !/^(?:待与贵方确认|待补充并确认|尚无证据|本部分内容将在)/u.test(value.trim())
   const filled = sections.filter(section => (section.kind === 'problem_solution' && links.length)
-    || section.blocks.some(block => ['para', 'bullets', 'steps'].includes(block.type)
-      && !(block.text ?? '').startsWith('待与贵方确认：')
-      && !(block.text ?? '').startsWith('待补充并确认：'))).length
+    || section.blocks.some(block => {
+      const lines = block.type === 'para' ? [block.text]
+        : ['bullets', 'steps'].includes(block.type) ? block.items : []
+      return lines?.some(substantive)
+    })).length
   const required = Math.ceil(sections.length / 2)
   if (filled < required) {
     const issues = sections.generationIssues ?? []
