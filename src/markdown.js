@@ -63,6 +63,12 @@ function pushBlock(lines, block, assetByName) {
       for (const item of block.items) lines.push(`| ${item.label} | ${item.value} |`)
       lines.push('')
       break
+    case 'chart':
+      lines.push(`### ${block.title}${block.evidenceStatus === 'user_unverified' ? '（数据待确认）' : ''}`, '',
+        `| 项目 | 数值（${block.unit}） |`, '| --- | ---: |')
+      for (const point of block.points) lines.push(`| ${point.label} | ${point.value} |`)
+      lines.push('', `> ${block.evidenceStatus === 'user_unverified' ? '原始资料（修改前）' : '数据依据'}：${block.source.path} · ${block.source.quote}`, '')
+      break
     case 'image': {
       const asset = assetByName.get(block.path)
       if (asset) lines.push(`![${block.caption ?? ''}](./${asset.fileName})`, '')

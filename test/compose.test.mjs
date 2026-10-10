@@ -38,6 +38,27 @@ test('正文可生成有证据的结构化要点，虚构要点被丢弃', async
   assert.equal(JSON.stringify(result).includes('九成'), false)
 })
 
+test('模型图表只有数值和标签均来自同一原文才进入方案', async () => {
+  const quote = '2024年线索 12 条；2025年线索 20 条。'
+  const manifest = { files: [{ path: 'trend.md', excerpt: quote }] }
+  const outline = [{ heading: '业务趋势', topics: ['trends'], sourcePaths: ['trend.md'] }]
+  const answer = { sections: [{ heading: '业务趋势', blocks: [
+    { type: 'chart', chartType: 'line', title: '线索变化', unit: '条',
+      points: [{ label: '2024年', value: 12 }, { label: '2025年', value: 20 }], path: 'trend.md', quote },
+    { type: 'chart', chartType: 'bar', title: '凭空增加', unit: '条',
+      points: [{ label: '2024年', value: 12 }, { label: '2025年', value: 80 }], path: 'trend.md', quote },
+  ] }] }
+  const ctx = { llm: { async *stream() {
+    yield { type: 'text-delta', text: JSON.stringify(answer) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const result = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(result[0].blocks.length, 1)
+  assert.equal(result[0].blocks[0].type, 'chart')
+  assert.equal(result[0].blocks[0].points[1].value, 20)
+})
+
 test('整稿输出被截断时按章重试，保留经过逐字引用校验的正文', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: 'CallWan 提供线索管理与客户触达。支持销售查看线索状态。' }] }
   const outline = [

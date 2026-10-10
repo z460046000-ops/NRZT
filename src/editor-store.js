@@ -128,6 +128,26 @@ function applyChange(solution, change) {
     const index = Number(parts[3])
     if (!Number.isInteger(index) || !block.items[index] || !['label', 'value'].includes(parts[4])) throw new EditorError(400, '指标位置无效')
     block.items[index][parts[4]] = required(value, '指标')
+  } else if (parts[2] === 'chart' && block.type === 'chart') {
+    if (parts.length === 4 && ['title', 'unit'].includes(parts[3])) {
+      const next = required(value, '图表信息')
+      if (next.length > (parts[3] === 'unit' ? 24 : 100)) throw new EditorError(400, '图表标题或单位过长')
+      block[parts[3]] = next
+      if (parts[3] === 'unit') block.evidenceStatus = 'user_unverified'
+    } else if (parts.length === 5 && ['label', 'value'].includes(parts[4])) {
+      const index = Number(parts[3])
+      if (!Number.isInteger(index) || !block.points[index]) throw new EditorError(400, '图表数据位置无效')
+      if (parts[4] === 'label') {
+        const next = required(value, '数据标签')
+        if (next.length > 40) throw new EditorError(400, '数据标签过长')
+        block.points[index].label = next
+      } else {
+        const next = Number(String(value).replaceAll(',', ''))
+        if (!Number.isFinite(next) || next < 0 || String(value).trim() === '') throw new EditorError(400, '图表数值须为非负数字')
+        block.points[index].value = next
+      }
+      block.evidenceStatus = 'user_unverified'
+    } else throw new EditorError(400, '图表修改位置无效')
   } else {
     throw new EditorError(400, '修改位置不受支持')
   }

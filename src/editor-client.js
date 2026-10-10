@@ -55,7 +55,7 @@
   function addBlock(parent, block) {
     const area = document.createElement('div')
     area.className = 'editor-block'
-    const typeNames = { para: '段落', quote: '引用', bullets: '要点', steps: '步骤', table: '表格', metrics: '指标', image: '图片' }
+    const typeNames = { para: '段落', quote: '引用', bullets: '要点', steps: '步骤', table: '表格', metrics: '指标', chart: '数据图表', image: '图片' }
     const heading = document.createElement('h4')
     heading.textContent = typeNames[block.type] ?? '内容'
     area.append(heading)
@@ -73,6 +73,18 @@
       field(area, `指标 ${index + 1} 名称`, `blocks/${block.id}/metrics/${index}/label`, item.label)
       field(area, `指标 ${index + 1} 数值`, `blocks/${block.id}/metrics/${index}/value`, item.value)
     })
+    if (block.type === 'chart') {
+      field(area, '图表标题', `blocks/${block.id}/chart/title`, block.title)
+      field(area, '统一单位', `blocks/${block.id}/chart/unit`, block.unit)
+      block.points.forEach((point, index) => {
+        field(area, `数据 ${index + 1} 标签`, `blocks/${block.id}/chart/${index}/label`, point.label)
+        field(area, `数据 ${index + 1} 数值`, `blocks/${block.id}/chart/${index}/value`, String(point.value))
+      })
+      const hint = document.createElement('p')
+      hint.className = 'editor-hint'
+      hint.textContent = '修改标签、单位或数值后，图表会标为待确认；原始资料仍保留供审核。'
+      area.append(hint)
+    }
     if (block.type === 'image') {
       field(area, '图片说明', `blocks/${block.id}/caption`, block.caption ?? '')
       const replace = document.createElement('label')

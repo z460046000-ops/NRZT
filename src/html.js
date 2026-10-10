@@ -68,6 +68,7 @@ function blockWeight(block) {
     case 'steps': return 1.5 + block.items.reduce((sum, item) => sum + Math.max(1, String(item).length / 90), 0)
     case 'table': return 2 + block.rows.reduce((sum, row) => sum + Math.max(1, row.join('').length / 80), 0)
     case 'metrics': return 4
+    case 'chart': return 6.5
     case 'image': return 6.5
     case 'quote': return 2 + String(block.text).length / 95
     default: return 3
@@ -196,6 +197,7 @@ function renderBlock(block, assetByName, features) {
       return `<div class="metrics" style="grid-template-columns:repeat(${Math.min(block.items.length, 4)},1fr)">`
         + block.items.map(m => `<div class="metric"><strong>${esc(m.value)}</strong><span>${esc(m.label)}</span></div>`).join('')
         + '</div>'
+    case 'chart': return renderChart(block)
     case 'image': {
       const asset = assetByName.get(block.sourcePath ?? block.path)
       if (!asset) return ''
@@ -207,6 +209,20 @@ function renderBlock(block, assetByName, features) {
     default:
       return ''
   }
+}
+
+function renderChart(block) {
+  const max = Math.max(1, ...block.points.map(point => point.value))
+  const pending = block.evidenceStatus === 'user_unverified'
+  const source = `<p class="chart-source source-evidence">${pending ? '数据已修改，待核对原始依据' : '数据依据'}：${esc(block.source.path)} · ${esc(block.source.quote)}</p>`
+  const body = block.chartType === 'bar'
+    ? `<div class="chart-bars">${block.points.map(point => `<div class="chart-row"><span class="chart-label">${esc(point.label)}</span><div class="chart-track"><span style="width:${Math.max(0, point.value / max * 100).toFixed(2)}%"></span></div><strong>${esc(point.value)} ${esc(block.unit)}</strong></div>`).join('')}</div>`
+    : (() => {
+      const coords = block.points.map((point, index) => ({ x: 58 + index * 884 / (block.points.length - 1), y: 30 + (1 - point.value / max) * 225 }))
+      const line = coords.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
+      return `<div class="chart-line"><svg viewBox="0 0 1000 290" role="img" aria-label="${esc(block.title)}，单位 ${esc(block.unit)}"><line x1="58" y1="255" x2="942" y2="255" class="chart-base"/><polyline points="${line}" class="chart-path"/>${coords.map((point, index) => `<circle cx="${point.x}" cy="${point.y}" r="7" class="chart-dot"><title>${esc(block.points[index].label)}：${esc(block.points[index].value)} ${esc(block.unit)}</title></circle>`).join('')}</svg><div class="chart-axis" style="grid-template-columns:repeat(${block.points.length},1fr)">${block.points.map(point => `<div><span>${esc(point.label)}</span><strong>${esc(point.value)}</strong></div>`).join('')}</div></div>`
+    })()
+  return `<figure class="data-chart ${block.chartType === 'line' ? 'trend-chart' : 'comparison-chart'}"><figcaption><h3>${esc(block.title)}</h3><span>${esc(block.unit)}${pending ? ' · 待确认' : ''}</span></figcaption>${body}${source}</figure>`
 }
 
 function renderCard(block, assetByName, features) {
@@ -221,7 +237,8 @@ function renderCard(block, assetByName, features) {
 function coverSlide(solution, t) {
   const meta = solution.meta
   const titleSize = solution.title.length > 70 ? 46 : solution.title.length > 35 ? 56 : 68
-  return `<section class="slide cover">
+  const offset = [...solution.title].reduce((value, char) => value + char.codePointAt(0), 0) % 2 === 1
+  return `<section class="slide cover${offset ? ' cover-offset' : ''}">
   <div class="cover-top"><span>${esc(meta.company ?? '')}</span><span>${esc(meta.date ?? '')}</span></div>
   <div class="cover-grid"><div class="cover-main">
     <h1 style="font-size:${titleSize}px">${esc(solution.title)}</h1>
@@ -243,7 +260,7 @@ function tocSlide(solution, sections, start) {
 
 function dividerSlide(solution, section, no, t) {
   const headingSize = section.heading.length > 60 ? 30 : section.heading.length > 30 ? 36 : 44
-  return `<section class="slide divider">
+  return `<section class="slide divider${no % 2 === 0 ? ' divider-light' : ''}">
   <div class="inner">
     <p class="chap">${String(no).padStart(2, '0')}</p>
     <h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>
@@ -253,7 +270,20 @@ function dividerSlide(solution, section, no, t) {
 </section>`
 }
 
-function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features) {
+function layoutFor(solution, section, blocks, pageIndex, previous) {
+  const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
+  const family = types.includes('chart') ? 'chart'
+    : types.includes('steps') ? 'process'
+      : types.includes('image') ? 'evidence'
+        : blocks.length <= 2 && blocks[0]?.type === 'para' && String(blocks[0].text).length <= 190 ? 'statement'
+          : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
+  const variants = family === 'chart' ? ['chart-wide'] : [`${family}-left`, `${family}-right`]
+  const seed = [...`${solution.title}:${section.heading}:${pageIndex}`].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
+  const choice = variants[seed % variants.length]
+  return choice === previous && variants.length > 1 ? variants.find(item => item !== choice) : choice
+}
+
+function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features, layout) {
   const statement = blocks.length <= 2 && blocks[0]?.type === 'para'
     && String(blocks[0].text).length <= 190
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
@@ -269,7 +299,7 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const visual = types.includes('steps') ? ' process-slide' : types.includes('image') ? ' evidence-slide'
     : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? ' capability-slide' : ''
-  return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual}">
+  return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
   <div class="body"${gap}>
@@ -298,13 +328,13 @@ function paginateLink(link) {
 }
 
 /** 痛点页与方案页使用同一编号；每页最多两组，保留阅读和证据空间。 */
-function linkedSlide(solution, section, links, solutionPage) {
+function linkedSlide(solution, section, links, solutionPage, index = 0) {
   const tag = solution.meta.product ?? solution.title
   const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
   const cards = links.map(link => solutionPage
     ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3><p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p></div></article>`
     : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></article>`).join('\n')
-  return `<section class="slide linked-slide ${solutionPage ? 'solution-links' : 'pain-links'}">
+  return `<section class="slide linked-slide ${solutionPage ? 'solution-links' : 'pain-links'}${index % 2 ? ' pair-stacked' : ''}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2></div>
   <div class="linked-body">${cards}</div>
@@ -337,17 +367,20 @@ export function renderHtml(solution, assets) {
     slides.push(tocSlide(solution, solution.sections.slice(i, i + 6), i))
   }
   let contentPages = 0
+  let previousLayout = ''
   solution.sections.forEach((section, i) => {
     slides.push(dividerSlide(solution, section, i + 1, t))
     if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
-      for (const link of solution.painSolutionLinks.flatMap(paginateLink)) {
-        slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains'))
+      for (const [index, link] of solution.painSolutionLinks.flatMap(paginateLink).entries()) {
+        slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains', index))
       }
       if (section.kind !== 'problem_solution') return
     }
     for (const pageBlocks of paginateBlocks(section.blocks)) {
       contentPages += 1
-      slides.push(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features))
+      const layout = layoutFor(solution, section, pageBlocks, contentPages, previousLayout)
+      previousLayout = layout
+      slides.push(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout))
     }
   })
   slides.push(closingSlide(solution, t))
@@ -642,6 +675,57 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .pair-arrow{position:relative;font-size:0}
 .pair-arrow::before{content:"";position:absolute;left:4px;right:12px;top:50%;height:2px;background:var(--red)}
 .pair-arrow::after{content:"";position:absolute;right:10px;top:calc(50% - 5px);width:9px;height:9px;border-top:2px solid var(--red);border-right:2px solid var(--red);transform:rotate(45deg)}
+.layout-statement-right .body{grid-template-columns:minmax(0,.68fr) minmax(0,1.45fr)}
+.layout-statement-right .body>.para{grid-column:2;grid-row:1}
+.layout-statement-right .body>.source-note{grid-column:1;grid-row:1}
+.layout-statement-right .body:has(> :only-child)>.para{grid-column:1 / -1}
+.layout-process-right .flow{display:grid!important;grid-template-columns:1fr!important;border-top:0;margin:0;gap:0}
+.layout-process-right .flow::before{content:"";position:absolute;left:22px;top:32px;bottom:32px;width:1px;background:var(--line)}
+.layout-process-right .step{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;min-height:0;padding:14px 0;border-bottom:1px solid var(--line)}
+.layout-process-right .step::before,.layout-process-right .step::after{display:none}
+.layout-process-right .step i{position:relative;z-index:1;width:45px;height:45px;display:grid;place-items:center;background:var(--slide);border:1px solid var(--red);border-radius:50%;font-size:17px}
+.layout-process-right .step span{margin:0;font-size:19px}
+.layout-capability-left .body .card .bullets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 36px;align-content:start}
+.layout-capability-left .body .card .bullets li{display:block;padding:18px 0;border-top:1px solid var(--line);border-bottom:0;font-size:20px}
+.layout-capability-left .body .card .bullets li::before{display:block;margin-bottom:12px}
+.layout-capability-right .body>.grid{grid-template-columns:1fr!important;gap:4px}
+.layout-capability-right .card{padding:6px 0 16px}
+.layout-editorial-right .body{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,.75fr);align-content:start;gap:24px 44px}
+.layout-editorial-right .body>.source-note{grid-column:2;align-self:start}
+.layout-editorial-right .body>.grid,.layout-editorial-right .body>.table{grid-column:1 / -1}
+.layout-editorial-right .body>.para{grid-column:1}
+.pair-stacked .pair-map{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:20px}
+.pair-stacked .pair-arrow{display:none}
+.pair-stacked .pair-problem,.pair-stacked .pair-answer{padding:16px 28px}
+.pair-stacked .pair-map h3{margin-top:8px;font-size:21px}
+.pair-stacked .pair-map p{margin-top:10px;font-size:13px;line-height:1.45}
+.cover-offset .cover-grid{grid-template-columns:160px minmax(0,1fr)}
+.cover-offset .cover-main{grid-column:2;grid-row:1}
+.cover-offset .cover-geometry{grid-column:1;grid-row:1;transform:scaleX(-1)}
+.divider-light{background:var(--slide);color:var(--ink)}
+.divider-light .chap{color:var(--red);opacity:1}
+.divider-light h2{color:var(--ink)}
+.divider-light p{color:var(--ink2)}
+.data-chart{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;gap:18px;margin:0}
+.data-chart figcaption{display:flex;justify-content:space-between;gap:24px;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px}
+.data-chart figcaption h3{font-size:25px;line-height:1.25;font-weight:740;color:var(--ink)}
+.data-chart figcaption span{font-size:14px;color:var(--ink2);white-space:nowrap}
+.chart-bars{display:flex;flex-direction:column;justify-content:center;gap:14px;flex:1;min-height:0}
+.chart-row{display:grid;grid-template-columns:170px minmax(0,1fr) 150px;align-items:center;gap:24px;min-height:45px}
+.chart-label{font-size:17px;color:var(--ink);overflow-wrap:anywhere}
+.chart-track{height:20px;background:var(--tint);overflow:hidden}
+.chart-track span{display:block;height:100%;background:var(--blue)}
+.chart-row strong{text-align:right;font-size:19px;font-weight:720;color:var(--ink);font-variant-numeric:tabular-nums}
+.chart-line{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center}
+.chart-line svg{width:100%;height:245px;overflow:visible}
+.chart-base{stroke:var(--line);stroke-width:2}
+.chart-path{fill:none;stroke:var(--blue);stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.chart-dot{fill:var(--red);stroke:var(--slide);stroke-width:3}
+.chart-axis{display:grid;gap:12px;margin:4px 0 0 0}
+.chart-axis div{text-align:center;display:flex;flex-direction:column;gap:6px;min-width:0}
+.chart-axis span{font-size:15px;color:var(--ink2);overflow-wrap:anywhere}
+.chart-axis strong{font-size:18px;color:var(--ink);font-variant-numeric:tabular-nums}
+.chart-source{font-size:12px;line-height:1.45;color:var(--ink2);border-top:1px solid var(--line);padding-top:10px;max-height:55px;overflow:auto;overflow-wrap:anywhere}
 .closing h2{color:var(--hero-ink)}
 .closing p{color:var(--hero-muted)}
 ::selection{background:var(--blue);color:#fff}

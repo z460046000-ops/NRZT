@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { sectionsFromOutline, suggestOutline } from './outline.js'
 import { salesOutlineCandidate, sourcePriority, technicalHeading } from './sales.js'
+import { normalizeChart } from './chart.js'
 import { cleanMaterialText, isReadableProse } from './source-quality.js'
 import { hasInternalCopy } from './customer-copy.js'
 
@@ -43,6 +44,13 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
     if (!validEvidence(block, sources) || !sourcePaths.includes(block.path)
       || !isReadableProse(block.quote)) return []
     const type = block.type ?? 'para'
+    if (type === 'chart') {
+      try {
+        const chart = normalizeChart({ ...block, source: { path: block.path, quote: block.quote } },
+          { sourceText: sources.get(block.path) })
+        return [chart]
+      } catch { return [] }
+    }
     let body
     if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
       && !hasInternalCopy(block.text) && block.text.length <= 1200) {
@@ -113,7 +121,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     limited.push({ path: sourcePath, content: content.slice(0, budget) })
     budget -= content.length
   }
-  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps","text":"完整段落，仅 para 使用","items":["要点，仅 bullets/steps 使用"],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。`
+  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。`
   const sections = [...fallback]
   try {
     const reply = await askForJson(ctx, agent, signal, system,
@@ -136,7 +144,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     const aliases = new Map(relevant.map(source => [source.id, source.path]))
     try {
       const reply = await askForJson(ctx, agent, signal,
-        `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；不要编造产品能力、客户事实、收益或承诺。`,
+        `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。`,
         { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 2400)
       const candidate = reply.value?.section ?? reply.value
       sections[index] = sectionFromCandidate(candidate, fallback[index], item.sourcePaths ?? [], sources, aliases)

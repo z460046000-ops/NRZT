@@ -25,6 +25,7 @@ import { loadPending, savePending } from './outline.js'
 import { painWithBasis } from './pain-basis.js'
 import { isSafeDisplayText } from './source-quality.js'
 import { customerFacingSolution } from './customer-copy.js'
+import { normalizeChart } from './chart.js'
 
 /** Cordis Loader 身份。 */
 export const name = 'wlyd-presales-solution'
@@ -42,7 +43,7 @@ export const SECTION_KINDS = [
 ]
 
 /** 章节内容的块类型。 */
-export const BLOCK_TYPES = ['para', 'bullets', 'steps', 'table', 'image', 'quote', 'metrics']
+export const BLOCK_TYPES = ['para', 'bullets', 'steps', 'table', 'image', 'quote', 'metrics', 'chart']
 
 function isStr(v) {
   return typeof v === 'string'
@@ -278,6 +279,10 @@ function normalizeBlock(block, sIdx, bIdx) {
       })
       return { type, items }
     }
+    case 'chart': {
+      try { return normalizeChart(block) }
+      catch (error) { throw bad('wlyd_solution', `${where}: ${error.message}`) }
+    }
     default:
       throw bad('wlyd_solution', `${where}.type 未支持`)
   }
@@ -350,6 +355,7 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
     }
     return block.type === 'table' && block.rows?.some(row => row.some(substantive))
       || block.type === 'metrics' && block.items?.some(item => substantive(item.value))
+      || block.type === 'chart' && block.points?.length >= 2
   })).length
   if (filled < Math.ceil(solution.sections.length / 2)) {
     throw bad('wlyd_solution', filled === 0
@@ -629,7 +635,7 @@ export function apply(ctx, config) {
       + '合并客户问题和方案时 kind=problem_solution，分别呈现时用 pains/solution。内容块类型:para{text}段落、bullets{items[]}要点卡、'
       + 'steps{items[]}流程步骤、table{headers[],rows[][]}表格(实施路径/对比首选)、'
       + 'image{path,caption}配图(path 为材料中的图片路径)、quote{text}金句/提示、'
-      + 'metrics{items:[{label,value}]}数值亮点。趋势数据须来自导入材料,不得虚构;'
+      + 'metrics{items:[{label,value}]}数值亮点；chart{chartType:"bar|line",title,unit,points:[{label,value}],source:{path,quote}}有原文依据的比较或趋势图。图表数值和标签必须出现在同一段原文；'
       + '必须提供 pain_solution_links,每条痛点有唯一编号、对应解决办法和两侧的材料原文依据；'
       + '工具会按该映射重建独立 pains/solution 章或在合并章中呈现对应关系，防止前后不一致。证据不足时传空数组，相关内容标待确认。'
       + '材料未覆盖的信息用保守表述,并放入 boundary 的限制中。'
@@ -671,6 +677,15 @@ export function apply(ctx, config) {
                   rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
                   path: { type: 'string' },
                   caption: { type: 'string' },
+                  chartType: { type: 'string', enum: ['bar', 'line'] },
+                  title: { type: 'string' },
+                  unit: { type: 'string' },
+                  points: { type: 'array', items: { type: 'object', properties: {
+                    label: { type: 'string' }, value: { type: 'number' },
+                  } } },
+                  source: { type: 'object', properties: {
+                    path: { type: 'string' }, quote: { type: 'string' },
+                  } },
                 },
               },
             },

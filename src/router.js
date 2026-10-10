@@ -68,7 +68,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
     || section.blocks.some(block => {
       const lines = block.type === 'para' ? [block.text]
         : ['bullets', 'steps'].includes(block.type) ? block.items : []
-      return lines?.some(substantive)
+      return block.type === 'chart' && block.points?.length >= 2 || lines?.some(substantive)
     })).length
   const required = Math.ceil(sections.length / 2)
   if (filled < required) {

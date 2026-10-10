@@ -29,7 +29,10 @@ test('HTML 修改保存为同版 JSON、Markdown、DOCX，事实变更只进入�
       sections: [
         { kind: 'pains', heading: '客户痛点', blocks: [{ type: 'table', headers: ['编号', '客户痛点', '材料依据'], rows: [['P1', '资料分散', 'a.md：资料分散']] }] },
         { kind: 'solution', heading: '解决方案', blocks: [{ type: 'table', headers: ['编号', '方案', '材料依据'], rows: [['P1', '集中管理', 'a.md：集中管理']] }] },
-        { kind: 'boundary', heading: '边界', blocks: [{ type: 'para', text: '原始边界' }, { type: 'image', path: 'solution-assets/old.png', caption: '旧图' }] },
+        { kind: 'boundary', heading: '边界', blocks: [{ type: 'para', text: '原始边界' }, { type: 'image', path: 'solution-assets/old.png', caption: '旧图' },
+          { type: 'chart', chartType: 'line', title: '线索变化', unit: '条',
+            points: [{ label: '2024年', value: 12 }, { label: '2025年', value: 20 }],
+            source: { path: 'trend.md', quote: '2024年线索 12 条；2025年线索 20 条。' }, evidenceStatus: 'verified' }] },
       ],
       assets: [{ sourcePath: 'solution-assets/old.png', fileName: 'solution-assets/old.png', caption: '旧图' }],
     })
@@ -47,6 +50,7 @@ test('HTML 修改保存为同版 JSON、Markdown、DOCX，事实变更只进入�
         { path: 'title', value: '人工修改后的方案' },
         { path: 'links/P1/pain', value: '资料分散且版本不清' },
         { path: `blocks/${source.sections[2].blocks[0].id}/text`, value: '人工确认边界' },
+        { path: `blocks/${source.sections[2].blocks[2].id}/chart/1/value`, value: '22' },
       ],
       replacements: [{ blockId: source.sections[2].blocks[1].id, data: image.toString('base64') }],
       knowledge: { factChange: true, scope: 'project', targetId: 'project-1', reason: '更新客户问题' },
@@ -57,11 +61,15 @@ test('HTML 修改保存为同版 JSON、Markdown、DOCX，事实变更只进入�
     assert.equal(saved.title, '人工修改后的方案')
     assert.equal(saved.sections[0].blocks[0].rows[0][1], '资料分散且版本不清')
     assert.equal(saved.sections[2].blocks[0].text, '人工确认边界')
+    assert.equal(saved.sections[2].blocks[2].points[1].value, 22)
+    assert.equal(saved.sections[2].blocks[2].evidenceStatus, 'user_unverified')
     assert.deepEqual(saved.knowledgeProposals, [{ id: result.knowledge.id, materialRevision: 2 }])
     assert.notEqual(saved.sections[2].blocks[1].path, 'solution-assets/old.png')
     assert.deepEqual(await readFile(path.join(path.dirname(baseAbs), saved.sections[2].blocks[1].path)), image)
     assert.match(await readFile(`${baseAbs}.md`, 'utf8'), /资料分散且版本不清/)
+    assert.match(await readFile(`${baseAbs}.md`, 'utf8'), /数据待确认/u)
     assert.match(await readFile(`${baseAbs}.html`, 'utf8'), /人工修改后的方案/)
+    assert.match(await readFile(`${baseAbs}.html`, 'utf8'), /数据已修改，待核对原始依据/u)
     assert.equal((await readFile(`${baseAbs}.docx`))[0], 0x50)
     assert.equal(JSON.parse(await readFile(`${baseAbs}.versions/1/solution.json`, 'utf8')).title, '原始方案')
     assert.equal(JSON.parse(await readFile(`${baseAbs}.versions/2/solution.json`, 'utf8')).revision, 2)

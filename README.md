@@ -2,7 +2,7 @@
 
 `@wlyd/dsh-presales-solution` 是运行在 DeepSeek Harness（DSH）中的售前内容生成插件。它把企业资料、项目知识和可核对的公开背景整理为**面向客户的解决方案初稿**，并输出可编辑的 HTML 幻灯片、Markdown、Word 和结构化 JSON。目标不是机械复述资料，而是围绕“背景 → 客户挑战 → 对应做法 → 业务价值 → 适用边界”，按证据组织营销叙事。
 
-本文对应 **0.8.6** 分发包。该版本与 0.8.5 的生成代码相同，更新的是技术说明和包内 README。初稿仍需业务人员核对，尤其是客户现状、能力承诺和对外使用范围。
+本文对应 **0.8.8** 分发包。初稿仍需业务人员核对，尤其是客户现状、能力承诺和对外使用范围。
 
 ## 运行模型
 
@@ -40,6 +40,14 @@
 
 `wlyd_solution` 的结构化输入必须含 `pain_solution_links`，没有可靠配对时传 `[]`；`wlyd_platform_generate` 必须接收已确认的 `outline_headings`，并核对返回章节与大纲一致。这些是工具契约，不靠提示词单独约束。实现入口见 `src/router.js`、`src/content.js`、`src/source-quality.js` 和 `src/index.js`。
 
+### 版式选择与图表
+
+HTML 根据章节语义和内容块选择主张、能力、流程、证据、对照或数据图表页；同类页面有不同构图，连续页面避免重复。封面和章节页也有节奏变化。选择由方案标题、章节和页序确定，同一份 JSON 重新渲染会得到相同版式，不靠随机颜色制造差异。三套配色仍可选，但默认沿用企业红蓝主题。
+
+`chart` 内容块只接受 2—6 个同单位数据点，支持类别比较（`bar`）和按时间排列的趋势（`line`）。标题、类别、数字、单位及逐字引文保存在 `solution.json`；自动生成时还核对引文是否属于该章原始资料。任何数字或标签不在同一段引文中，就丢弃该图表。资料只有定性描述时使用流程或问题—做法关系图，不补造统计。直接调用 `wlyd_solution` 的调用方仍须核对传入的来源路径确实指向原始材料。
+
+HTML 负责图形表达；Markdown 和 Word 把同一图表数据输出为可审阅的表格并保留来源。HTML 编辑器可改图表标题、单位、标签和数值；改动数据后，所有格式都标记“数据待确认”，原始引文继续保留供审核。平台生成的纯 Markdown 若没有可核对的原始数字引文，不会自动转成图表。
+
 ## 面客话术与事实边界
 
 | 规则 | 处理方式 |
@@ -55,15 +63,15 @@
 
 ## 安装与配置
 
-前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.8.6.tgz` 放到本机，执行：
+前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.8.8.tgz` 放到本机，执行：
 
 ```sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.6.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.8.tgz"
 dsh plugin --profile web list
 dsh web
 ```
 
-若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.8.6`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
+若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.8.8`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
 
 内容中台由 **运行 DSH 的服务端**配置：
 

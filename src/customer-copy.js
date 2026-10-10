@@ -42,6 +42,7 @@ function customerBlock(block) {
     return { ...block, items: block.items.map(customerCopy) }
   }
   if (block.type === 'image') return { ...block, caption: customerCopy(block.caption) }
+  if (block.type === 'chart') return { ...block, title: customerCopy(block.title) }
   if (block.type === 'para' || block.type === 'quote') return { ...block, text: customerCopy(block.text) }
   return block
 }

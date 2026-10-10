@@ -117,6 +117,16 @@ function pushBlock(children, block, assetByName) {
       ))
       children.push(new Paragraph({ text: '' }))
       break
+    case 'chart':
+      children.push(new Paragraph({ text: `${block.title}${block.evidenceStatus === 'user_unverified' ? '（数据待确认）' : ''}`,
+        heading: HeadingLevel.HEADING_2 }))
+      children.push(makeTable(['项目', `数值（${block.unit}）`],
+        block.points.map(point => [{ text: point.label }, { text: String(point.value), bold: true }])))
+      children.push(new Paragraph({ children: [new TextRun({
+        text: `${block.evidenceStatus === 'user_unverified' ? '原始资料（修改前）' : '数据依据'}：${block.source.path} · ${block.source.quote}`,
+        italics: true, color: '666666', size: 17,
+      })] }))
+      break
     case 'image': {
       const asset = assetByName.get(block.path)
       if (!asset) break
