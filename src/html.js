@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { painBasisLabel } from './pain-basis.js'
 
 const EDITOR_SCRIPT = readFileSync(new URL('./editor-client.js', import.meta.url), 'utf8')
+const RELEASE_SCRIPT = readFileSync(new URL('./release-client.js', import.meta.url), 'utf8')
 
 const THEMES = {
   // 集团模板:白底、红 #d51008 主色、蓝 #1362af 辅色、微软雅黑
@@ -227,7 +228,7 @@ function coverSlide(solution, t) {
     <h1 style="font-size:${titleSize}px">${esc(solution.title)}</h1>
     ${solution.subtitle ? `<p class="sub">${esc(solution.subtitle)}</p>` : ''}
   </div><div class="cover-geometry" aria-hidden="true"><span></span><span></span><span></span></div></div>
-  <div class="cover-bottom"><span>${esc(meta.product ?? '')}</span><span>${esc(meta.contact ?? '')}</span></div>
+  <div class="cover-bottom"><span>${esc(meta.product ?? '')}</span><span>${esc([meta.version, meta.contact].filter(Boolean).join(' · '))}</span></div>
 </section>`
 }
 
@@ -284,8 +285,8 @@ function paginateLink(link) {
   const evidence = ['painEvidence', 'solutionEvidence']
   const parts = Object.fromEntries(fields.map(field => [field, splitText(link[field], 120)]))
   for (const field of evidence) {
-    parts[`${field}Path`] = splitText(link[field].path, 95)
-    parts[`${field}Quote`] = splitText(link[field].quote, 120)
+    parts[`${field}Path`] = splitText(link[field]?.path ?? '', 95)
+    parts[`${field}Quote`] = splitText(link[field]?.quote ?? '', 120)
   }
   const count = Math.max(...Object.values(parts).map(value => value.length))
   return Array.from({ length: count }, (_, i) => ({
@@ -302,8 +303,8 @@ function linkedSlide(solution, section, links, solutionPage) {
   const tag = solution.meta.product ?? solution.title
   const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
   const cards = links.map(link => solutionPage
-    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3><p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p></div></article>`
-    : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3><p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p></article>`).join('\n')
+    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p>`}</div></article>`
+    : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3>${solution.external ? '' : `<p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</article>`).join('\n')
   return `<section class="slide linked-slide ${solutionPage ? 'solution-links' : 'pain-links'}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2></div>
@@ -316,7 +317,7 @@ function closingSlide(solution, t) {
   return `<section class="slide closing">
   <div>
     <h2>期待与您共同推进下一步</h2>
-    <p>${esc([solution.meta.company, solution.meta.contact].filter(Boolean).join(' · '))}</p>
+    <p>${esc([solution.meta.company, solution.meta.version, solution.meta.contact].filter(Boolean).join(' · '))}</p>
   </div>
 </section>`
 }
@@ -327,7 +328,8 @@ function closingSlide(solution, t) {
  * @param {Array<{sourcePath: string, fileName: string, caption?: string}>} assets - 已复制的图片素材。
  * @returns {string} 完整 HTML 文档。
  */
-export function renderHtml(solution, assets) {
+export function renderHtml(solution, assets, options = {}) {
+  const preview = options.externalPreview
   const t = THEMES[solution.theme] ?? THEMES.corporate
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
   const features = { hasImage: false }
@@ -352,6 +354,16 @@ export function renderHtml(solution, assets) {
   })
   slides.push(closingSlide(solution, t))
 
+  const sourceToggleScript = solution.external && !preview ? '' : `
+  const sourceToggle = document.getElementById('source-toggle');
+  if (sourceToggle) sourceToggle.addEventListener('click', () => {
+    if (document.body.hasAttribute('data-revision')) { location.href = 'solution.html' + location.search; return; }
+    if (document.body.hasAttribute('data-editor-id')) { location.href = 'external-preview.html' + location.search; return; }
+    const hidden = document.body.classList.toggle('sources-hidden');
+    sourceToggle.textContent = hidden ? '显示来源' : '隐藏来源';
+    sourceToggle.setAttribute('aria-pressed', String(hidden));
+  });`
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -362,11 +374,12 @@ export function renderHtml(solution, assets) {
 ${cssFor(t, features)}
 </style>
 </head>
-<body${solution.editorId ? ` data-editor-id="${esc(solution.editorId)}"` : ''}>
+<body${solution.editorId ? ` data-editor-id="${esc(solution.editorId)}"` : ''}${preview ? ` data-editor-id="${esc(preview.editorId)}" data-revision="${esc(preview.revision)}"` : ''}>
 <main class="deck">
 ${slides.join('\n')}
 </main>
-<nav class="deck-controls" aria-label="幻灯片控制"><button type="button" id="prev-slide" aria-label="上一页">上一页</button><span id="slide-count">纵向浏览</span><button type="button" id="next-slide" aria-label="下一页">下一页</button><button type="button" id="source-toggle" aria-pressed="false">隐藏来源</button>${solution.editorId ? '<button type="button" id="edit-toggle" class="edit-toggle">编辑方案</button>' : ''}</nav>
+<nav class="deck-controls" aria-label="幻灯片控制"><button type="button" id="prev-slide" aria-label="上一页">上一页</button><span id="slide-count">纵向浏览</span><button type="button" id="next-slide" aria-label="下一页">下一页</button>${preview ? '<button type="button" id="source-toggle">返回内部稿</button>' : solution.external ? '' : `<button type="button" id="source-toggle" aria-pressed="false">${solution.editorId ? '查看外部稿' : '隐藏来源'}</button>`}${solution.editorId ? '<button type="button" id="edit-toggle" class="edit-toggle">编辑方案</button>' : ''}</nav>
+${preview ? `<aside class="release-panel" id="release-panel"><strong>外部稿预览 · 尚未批准外发</strong><p>确认内容、受众和授权后，才能生成可下载的外发文件。规则版本 ${esc(preview.policyVersion)}</p><button type="button" id="release-open">外发检查</button><div id="release-fields" hidden><label>结构已确认 <input id="release-structure" type="checkbox"></label><label>口径 <select id="release-stance"><option value="">请选择</option><option value="verified">已验证事实</option><option value="planned">以规划为主</option><option value="mixed">两者混合</option></select></label><label>目标受众 <input id="release-audience" type="text" placeholder="角色与关注点"></label><label>分发范围 <select id="release-distribution"><option value="">请选择</option><option value="partner">外部合作方</option><option value="public">可公开</option></select></label><label>事实基线已核对 <input id="release-facts" type="checkbox"></label><label>版本 <input id="release-version" type="text" placeholder="例如 V1.0"></label><label>确认人 <input id="release-reviewer" type="text" placeholder="填写姓名，仅留在内部记录"></label><label>客户名称、案例、指标与图片授权已检查 <input id="release-assets" type="checkbox"></label><label>价格、折扣和服务承诺已核对 <input id="release-commercial" type="checkbox"></label><label>强声明已有事实支撑 <input id="release-claims" type="checkbox"></label><fieldset class="release-checklist"><legend>外发前逐项检查</legend><label>无内部残留 <input id="release-no-internal" type="checkbox"></label><label>无未批准内容 <input id="release-approved" type="checkbox"></label><label>规划内容已标状态 <input id="release-planning" type="checkbox"></label><label>商务、责任、风险边界可见 <input id="release-boundaries" type="checkbox"></label><label>无生成痕迹与占位符 <input id="release-no-automation" type="checkbox"></label><label>目录、标题、引用一致 <input id="release-structure-consistent" type="checkbox"></label><label>名称、版本、日期一致 <input id="release-version-consistent" type="checkbox"></label><label>声明强度未升级 <input id="release-strength" type="checkbox"></label><label>问题、方案、价值与必要论证完整 <input id="release-causal-chain" type="checkbox"></label></fieldset><button type="button" id="release-submit">检查并生成外发文件</button><div id="release-result" role="status"></div></div></aside>` : ''}
 ${solution.editorId ? `<aside id="editor-panel" class="editor-panel" aria-label="编辑方案" hidden>
   <header class="editor-header"><div><strong>编辑方案</strong><span>修改将生成新版本</span></div><button type="button" id="editor-close" aria-label="关闭编辑区">关闭</button></header>
   <div id="editor-status" class="editor-status" role="status">点击“编辑方案”开始</div>
@@ -408,12 +421,7 @@ ${solution.editorId ? '<div id="save-notice" class="save-notice" role="status" h
   if (active > 0) show(active);
   document.getElementById('prev-slide').addEventListener('click', () => show(active ? active - 1 : 1));
   document.getElementById('next-slide').addEventListener('click', () => show(active ? active + 1 : 1));
-  const sourceToggle = document.getElementById('source-toggle');
-  sourceToggle.addEventListener('click', () => {
-    const hidden = document.body.classList.toggle('sources-hidden');
-    sourceToggle.textContent = hidden ? '显示来源' : '隐藏来源';
-    sourceToggle.setAttribute('aria-pressed', String(hidden));
-  });
+${sourceToggleScript}
   document.addEventListener('keydown', event => {
     if (event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable]')) return;
     if (['ArrowRight','ArrowDown','PageDown',' '].includes(event.key)) { event.preventDefault(); show(active ? active + 1 : 1); }
@@ -423,6 +431,7 @@ ${solution.editorId ? '<div id="save-notice" class="save-notice" role="status" h
   });
 </script>
 ${solution.editorId ? `<script>${EDITOR_SCRIPT}</script>` : ''}
+${preview ? `<script>${RELEASE_SCRIPT}</script>` : ''}
 </body>
 </html>
 `
@@ -644,6 +653,15 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .pair-arrow::after{content:"";position:absolute;right:10px;top:calc(50% - 5px);width:9px;height:9px;border-top:2px solid var(--red);border-right:2px solid var(--red);transform:rotate(45deg)}
 .closing h2{color:var(--hero-ink)}
 .closing p{color:var(--hero-muted)}
+.release-panel{position:fixed;z-index:101;right:20px;top:20px;width:min(360px,calc(100vw - 40px));max-height:calc(100vh - 40px);overflow:auto;padding:18px;background:var(--slide);border:1px solid var(--line);box-shadow:0 12px 32px rgba(0,0,0,.18);font-size:14px;line-height:1.5}
+.release-panel>strong{display:block;font-size:16px}.release-panel>p{margin:7px 0 12px;color:var(--ink2)}
+.release-panel button{padding:9px 12px;border:1px solid var(--line);background:var(--tint);color:var(--ink);cursor:pointer}
+.release-checklist{margin:6px 0;padding:10px;border:1px solid var(--line);display:grid;gap:9px}.release-checklist legend{padding:0 5px;font-weight:700}.release-checklist label{font-size:13px}
+.release-panel button:focus-visible,.release-panel input:focus-visible,.release-panel select:focus-visible{outline:2px solid var(--blue)}
+#release-fields{display:grid;gap:10px;margin-top:15px}#release-fields[hidden]{display:none}
+#release-fields label{display:grid;gap:4px}#release-fields input[type=text],#release-fields select{width:100%;padding:8px;border:1px solid var(--line);background:var(--slide);color:var(--ink)}
+#release-fields label:has(>input[type=checkbox]){display:flex;flex-direction:row-reverse;justify-content:flex-end;align-items:center;gap:9px;min-height:24px}
+#release-fields input[type=checkbox]{width:18px;height:18px}#release-result{overflow-wrap:anywhere}#release-result ul{padding-left:20px}#release-result a{display:inline-block;margin:8px 10px 0 0;color:var(--blue-dark)}
 ::selection{background:var(--blue);color:#fff}
-@media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`
+@media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`
 }

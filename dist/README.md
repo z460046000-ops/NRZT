@@ -2,7 +2,7 @@
 
 `@wlyd/dsh-presales-solution` 是运行在 DeepSeek Harness（DSH）中的售前内容生成插件。它把企业资料、项目知识和可核对的公开背景整理为**面向客户的解决方案初稿**，并输出可编辑的 HTML 幻灯片、Markdown、Word 和结构化 JSON。目标不是机械复述资料，而是围绕“背景 → 客户挑战 → 对应做法 → 业务价值 → 适用边界”，按证据组织营销叙事。
 
-本文对应 **0.8.6** 分发包。该版本与 0.8.5 的生成代码相同，更新的是技术说明和包内 README。初稿仍需业务人员核对，尤其是客户现状、能力承诺和对外使用范围。
+本文对应 **0.8.7** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
 
 ## 运行模型
 
@@ -51,19 +51,19 @@
 | 保留可追溯性 | 原文引文、来源路径和证据状态不做“润色”；所有导出从同一 `solution.json` 渲染 |
 | 封面与演示页面 | 封面只放主题和必要抬头，目录单独成页；主标题、章节标题、内容标题和注释有层级；长内容拆页并防止越界 |
 
-这里的“面客措辞”是**生成约束**，不等于正式外发审批或脱敏。HTML 的“隐藏来源”仅控制当前页面和打印的显示；JSON、Markdown、Word 中的来源仍在。发送给客户前应人工确认事实、客户名称、商务信息、图片授权和适用版本。本分发包不包含独立的外发稿审核与脱敏流程。
+这里的“面客措辞”也是生成约束，但不能代替正式审批。内部稿保留来源；在 HTML 中点击“查看外部稿”可预览去除来源字段后的面客版本。只有完成外发检查并生成独立外发文件后，才可按确认的用途使用。客户事实、名称、商务信息、图片授权和适用版本仍需人工核对。
 
 ## 安装与配置
 
-前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.8.6.tgz` 放到本机，执行：
+前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.8.7.tgz` 放到本机，执行：
 
 ```sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.6.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.8.7.tgz"
 dsh plugin --profile web list
 dsh web
 ```
 
-若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.8.6`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
+若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.8.7`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
 
 内容中台由 **运行 DSH 的服务端**配置：
 
@@ -95,7 +95,7 @@ dsh web
 | `solution.versions/` | HTML 每次保存后的历史快照 |
 | `solution.knowledge-proposals/` | 涉及事实的编辑所提交的待审核记录 |
 
-结果消息提供结构预览、HTML 编辑入口和 Word / Markdown / JSON 下载。先完成 DSH Web 认证，再在同一浏览器打开。HTML 可切换逐页演示和“隐藏来源”；该按钮不删底层证据。HTML 编辑保存后生成新修订版，并从 JSON 重渲染三种格式；并发旧窗口会提示刷新，避免覆盖新版。离线双击 HTML 只能预览和打印；在 Word 或 Markdown 中直接修改不会反向同步。
+结果消息提供结构预览、内部 HTML 编辑入口和 Word / Markdown / JSON 下载。先完成 DSH Web 认证，再在同一浏览器打开。内部 HTML 默认展示来源，点击“查看外部稿”进入独立预览及外发检查；内部 JSON 与证据不随外发文件下载。HTML 编辑保存后生成新修订版，并从 JSON 重渲染三种内部格式；并发旧窗口会提示刷新，避免覆盖新版。离线双击 HTML 只能预览和打印；在 Word 或 Markdown 中直接修改不会反向同步。
 
 编辑产品事实时可勾选“提交知识审核”。插件保存变更和来源，并尝试发到配置的审核接口；未配置时状态为 `awaiting_knowledge_api`，**不代表已经入库**。知识事实须确认后再入库，方案措辞修改不会自动覆盖知识。接口约定见 `guides/knowledge-api-contract.md`，历史记录可用 `node bin/submit-knowledge.mjs "/方案所在目录" solution` 重试。
 
@@ -112,6 +112,12 @@ HTML 设计规则见 `guides/slide-design.md` 和随包 Skill `skills/wlyd-presa
 | `wlyd_platform_generate` | 按已确认大纲使用平台资料生成 |
 
 上传时文本文件直接上传，DOCX / PDF / PPTX 先提取为 Markdown；图片和 ZIP 不作为平台上传件。远程链接和聊天附件尚未作为本地材料入口接入；扫描 PDF 暂无 OCR。分发包不包含材料、会话数据或凭证。手工修改 `solution.json` 后可用 `bin/render.mjs` 离线重渲染，但该操作不产生 HTML 编辑版本，也不提交知识审核。
+
+## 内部稿与外部稿
+
+生成和编辑的是内部稿，HTML 默认显示来源；右下角“查看外部稿”打开独立的面客预览。预览尚未批准外发。在预览中确认结构、口径、受众、分发范围、事实基线、版本及逐项清理检查后，系统才生成独立的外发 HTML、Markdown、Word。内部 JSON、原文引文和审核记录不会进入外发文件；原内部稿和已生成的外发快照不会被覆盖。
+
+规则文件可以修改并回退，使用方法见 [内部稿与外发稿规则](guides/external-release.md)。扫描只能识别部分敏感内容；客户名称、案例、图片、商务条件和声明强度须由确认人核对。本地确认记录不等于企业正式审批。
 
 ## 排错与验收
 

@@ -27,15 +27,18 @@ export function renderMarkdown(solution, assets) {
     lines.push(`## ${i + 1}. ${section.heading}`, '')
     if (section.lead) lines.push(`> ${section.lead}`, '')
     if (section.kind === 'problem_solution' && solution.painSolutionLinks?.length) {
-      pushBlock(lines, { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
-        rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
-          `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
+      pushBlock(lines, solution.external
+        ? { type: 'table', headers: ['编号', '客户问题', '对应做法'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution]) }
+        : { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
+            `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
     }
     for (const block of section.blocks) {
       pushBlock(lines, block, assetByName)
     }
   })
-  if (meta.contact) lines.push('---', '', meta.contact, '')
+  if (meta.contact || solution.external) lines.push('---', '', [meta.contact, solution.external && [meta.version, meta.date].filter(Boolean).join(' · ')].filter(Boolean).join(' · '), '')
   return lines.join('\n')
 }
 

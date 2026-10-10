@@ -103,8 +103,8 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const webBase = value.editUrl?.endsWith('/solution.html')
     ? value.editUrl.slice(0, -'solution.html'.length) : undefined
   const delivery = webBase
-    ? `![方案结构预览](${webBase}preview.svg)\n\n[打开幻灯片并编辑](${value.editUrl}) · [下载 Word](${webBase}solution.docx) · [下载 Markdown](${webBase}solution.md) · [下载 JSON 源稿](${webBase}solution.json)`
-    : `HTML：${value.editUrl}；Markdown：${value.markdownPath}；Word：${value.docxPath}`
+    ? `![方案结构预览](${webBase}preview.svg)\n\n[打开内部稿并编辑](${value.editUrl}) · [内部稿 Word](${webBase}solution.docx) · [内部稿 Markdown](${webBase}solution.md) · [内部 JSON 源稿](${webBase}solution.json)\n\n外发请在内部稿右下角选择“查看外部稿”，完成检查后下载独立的外发文件。`
+    : `内部稿 HTML：${value.editUrl}；内部稿 Markdown：${value.markdownPath}；内部稿 Word：${value.docxPath}`
   return {
     kind: 'success',
     text: `## ${manifest.label}售前解决方案\n\n${pending.auto ? `已自动检索资料，按${pending.stageType === 'deep' ? '深入接触' : '初次接触'}场景生成初稿；可继续补充客户信息或直接编辑。${pending.sourceSummary ? `\n\n**资料来源**：${pending.sourceSummary}` : ''}` : '已按确认大纲生成初稿，请先预览和复核。'}\n\n${delivery}\n\n**内容结构** · ${sections.length} 章\n\n${sections.map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`

@@ -59,9 +59,12 @@ export async function renderDocx(solution, assets) {
       }))
     }
     if (section.kind === 'problem_solution' && solution.painSolutionLinks?.length) {
-      pushBlock(children, { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
-        rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
-          `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
+      pushBlock(children, solution.external
+        ? { type: 'table', headers: ['编号', '客户问题', '对应做法'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution]) }
+        : { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
+            `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
     }
     for (const block of section.blocks) {
       pushBlock(children, block, assetByName)
@@ -72,7 +75,7 @@ export async function renderDocx(solution, assets) {
   children.push(new Paragraph({
     alignment: AlignmentType.CENTER,
     children: [new TextRun({
-      text: meta.contact || meta.company || '',
+      text: solution.external ? [meta.version, meta.date].filter(Boolean).join(' · ') : meta.contact || meta.company || '',
       color: '999999', size: 18,
     })],
   }))
