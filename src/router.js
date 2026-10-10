@@ -62,10 +62,25 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const { manifest, runId } = pending
   const sections = await composeSections(ctx, agent, signal, manifest, pending.outline, links,
     pending.auto ? { sales: true, stage: pending.stageType } : {})
+  const filled = sections.filter(section => (section.kind === 'problem_solution' && links.length)
+    || section.blocks.some(block => ['para', 'bullets', 'steps'].includes(block.type)
+      && !(block.text ?? '').startsWith('待与贵方确认：')
+      && !(block.text ?? '').startsWith('待补充并确认：'))).length
+  const required = Math.ceil(sections.length / 2)
+  if (filled < required) {
+    const issues = sections.generationIssues ?? []
+    const reason = issues.includes('model_unavailable') ? '当前会话没有可用的生成模型'
+      : issues.includes('no_readable_source') ? '导入资料中没有可用正文'
+        : issues.includes('max-tokens') ? '模型输出被截断'
+          : issues.includes('model_error') ? '模型调用失败'
+            : '模型正文或引用未通过校验'
+    return { kind: 'error', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 ${filled}/${sections.length} 章生成了有依据的正文，未达到交付要求，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
+  }
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
     arguments: {
-      title: `${manifest.label}售前解决方案`, sections,
+      // composeSections 的数组带有仅供诊断的非枚举属性；DSH 工具参数要求纯 JSON。
+      title: `${manifest.label}售前解决方案`, sections: [...sections],
       ...(pending.auto ? { subtitle: pending.stageType === 'deep' ? '深入沟通版 · 待复核' : '初次接触版 · 待复核',
         meta: { product: manifest.label } } : {}),
       pain_solution_links: links,

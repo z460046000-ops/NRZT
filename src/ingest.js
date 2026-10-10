@@ -147,6 +147,10 @@ function capText(text, maxChars) {
   return { text: text.slice(0, maxChars), note: `已截断(原文 ${text.length} 字,上限 ${maxChars})` }
 }
 
+function capReadableText(text, filePath, maxChars) {
+  return capText(cleanMaterialText(text, filePath), maxChars)
+}
+
 function excerpt(text, n = 300) {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length <= n ? flat : `${flat.slice(0, n)}…`
@@ -223,13 +227,15 @@ export async function ingestMaterials(ctx, args, exec) {
     try {
       if (kind === 'text') {
         const raw = await ctx.fs.readText(file.target, signal)
-        const { text, note } = capText(raw, maxChars)
-        pushEntry(relOf(file.target), kind, file.size, text, note)
+        const rel = relOf(file.target)
+        const { text, note } = capReadableText(raw, rel, maxChars)
+        pushEntry(rel, kind, file.size, text, note)
       } else if (kind === 'docx' || kind === 'pdf' || kind === 'pptx') {
         const buffer = await readFile(ctx.fs.processPath(file.target))
         const { text } = await extractBinaryText(kind, buffer)
-        const capped = capText(text.trim(), maxChars)
-        pushEntry(relOf(file.target), kind, file.size, capped.text, capped.note)
+        const rel = relOf(file.target)
+        const capped = capReadableText(text, rel, maxChars)
+        pushEntry(rel, kind, file.size, capped.text, capped.note)
       } else if (kind === 'archive') {
         const buffer = await readFile(ctx.fs.processPath(file.target))
         const rel = relOf(file.target)
@@ -247,7 +253,7 @@ export async function ingestMaterials(ctx, args, exec) {
               } else {
                 text = (await extractBinaryText(itemKind, item.buffer)).text
               }
-              const capped = capText(text.trim(), maxChars)
+              const capped = capReadableText(text, item.vpath, maxChars)
               pushEntry(item.vpath, itemKind, item.buffer.length, capped.text, capped.note ?? '位于压缩包内')
             } catch (err) {
               warnings.push(`包内文件提取失败 ${item.vpath}:${errMsg(err)}`)

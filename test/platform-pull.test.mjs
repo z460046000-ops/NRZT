@@ -54,6 +54,25 @@ const judge = answers => ({
   },
 })
 
+const salesDraftModel = {
+  async *stream(options) {
+    let answer = { decision: 'ask', question: '客户场景待确认' }
+    if (options.system.includes('售前方案撰写员')) {
+      const input = JSON.parse(options.messages[0].content[0].text)
+      const sources = new Map(input.sources.map(source => [source.path, source.content]))
+      answer = { sections: input.outline.map(item => {
+        const sourcePath = item.sourcePaths.find(candidate => sources.has(candidate))
+        const quote = sources.get(sourcePath)?.split('。')[0]?.trim()
+        return { heading: item.heading, blocks: quote ? [{ type: 'para',
+          text: `${sourcePath.startsWith('公开资料') ? '公开资料显示（待核实）：' : ''}${quote}。`,
+          path: sourcePath, quote }] : [] }
+      }) }
+    }
+    yield { type: 'text-delta', text: JSON.stringify(answer) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  },
+}
+
 /** fetch 桩:按 URL 前缀匹配(更具体的前缀放前面),返回 Response。 */
 async function withFetch(routes, fn) {
   const original = globalThis.fetch
@@ -175,8 +194,8 @@ test('只说 CallWan 售前方案：自动读取匹配知识库并直接生成�
       markdownPath: 'solution.md', docxPath: 'solution.docx', editUrl: 'http://localhost/solution.html',
     } } },
   })
-  const ctx = { tools, fs: fsShim() }
-  const agent = { session: { header: { cwd } } }
+  const ctx = { tools, fs: fsShim(), llm: salesDraftModel }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
   const routes = platformRoutes({
     bases: [{ id: 'kb', name: 'CallWan 产品库' }],
     knowledge: [{ id: 'k1', title: '产品介绍.md', file_type: 'md', parse_status: 'completed' }],
@@ -200,8 +219,8 @@ test('匹配知识库暂不可读时自动查公开资料并直接生成待核�
       markdownPath: 'solution.md', docxPath: 'solution.docx', editUrl: 'http://localhost/solution.html',
     } } },
   })
-  const ctx = { tools, fs: fsShim() }
-  const agent = { session: { header: { cwd } } }
+  const ctx = { tools, fs: fsShim(), llm: salesDraftModel }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
   const routes = platformRoutes({
     bases: [{ id: 'kb', name: 'CallWan 产品库' }],
     knowledge: [{ id: 'k1', title: '尚在解析.md', file_type: 'md', parse_status: 'processing' }],

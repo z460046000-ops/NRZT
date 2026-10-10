@@ -32,7 +32,9 @@ export function cleanMaterialText(value, sourcePath = '') {
     text = decodeEntities(text)
       .replace(/<!--[\s\S]*?-->/gu, ' ')
       .replace(/<(style|script|svg|pre|code|template|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/giu, '\n')
-      .replace(/<[^>]+>/gu, '\n')
+      // 行内标签用空格衔接，避免把一整句拆成大量短片段后误判为乱码。
+      .replace(/<\/?(?:div|p|h[1-6]|li|section|article|header|footer|main|aside|br|tr|table|ul|ol)\b[^>]*>/giu, '\n')
+      .replace(/<[^>]+>/gu, ' ')
   }
   const lines = []
   let fenced = false

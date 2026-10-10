@@ -34,7 +34,52 @@ async function readSources(ctx, agent, signal, manifest) {
   }
 }
 
-/** 用户确认大纲后，再从全文材料生成有逐字引用支撑的段落。无依据段落不进入成稿。 */
+function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases = new Map()) {
+  const proposed = Array.isArray(candidate?.blocks) ? candidate.blocks : candidate?.paragraphs
+  if (!Array.isArray(proposed)) return section
+  const blocks = proposed.slice(0, 5).flatMap(raw => {
+    if (!raw || typeof raw !== 'object') return []
+    const block = { ...raw, path: raw.path ?? aliases.get(raw.sourceId) }
+    if (!validEvidence(block, sources) || !sourcePaths.includes(block.path)
+      || !isReadableProse(block.quote)) return []
+    const type = block.type ?? 'para'
+    let body
+    if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
+      && !hasInternalCopy(block.text) && block.text.length <= 1200) {
+      body = { type, text: block.text.trim() }
+    } else if (['bullets', 'steps'].includes(type) && Array.isArray(block.items)
+      && block.items.length >= 2 && block.items.length <= 6
+      && block.items.every(item => isReadableProse(item) && !hasInternalCopy(item) && item.length <= 180)) {
+      body = { type, items: block.items.map(item => item.trim()) }
+    }
+    return body ? [body, { type: 'quote', text: `来源：${block.path}\n${block.quote.trim()}` }] : []
+  })
+  const lead = typeof candidate.lead === 'string' && candidate.lead.trim().length <= 120
+    && isReadableProse(candidate.lead) && !hasInternalCopy(candidate.lead) && blocks.length
+    ? candidate.lead.trim() : undefined
+  return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
+}
+
+async function askForJson(ctx, agent, signal, system, input, maxTokens) {
+  let text = ''
+  let blockText = ''
+  let finish
+  for await (const chunk of ctx.llm.stream({
+    provider: agent.options.provider, model: agent.options.model, system,
+    messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
+      source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
+    maxTokens, signal, sessionId: agent?.session?.id,
+  })) {
+    if (chunk.type === 'text-delta') text += chunk.text
+    if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
+    if (chunk.type === 'finish') finish = chunk.reason
+  }
+  if (finish?.kind !== 'stop') return { issue: finish?.kind ?? 'no_finish' }
+  try { return { value: parseJson(text || blockText) } }
+  catch { return { issue: 'invalid_json' } }
+}
+
+/** 从全文材料生成逐字引用支撑的段落；整稿失败后按章重试，不交付全占位方案。 */
 export async function composeSections(ctx, agent, signal, manifest, outline, links, settings = {}) {
   const fallback = sectionsFromOutline(manifest, outline, links).map((section, index) => {
     const sourceFiles = (outline[index].sourcePaths ?? []).map(sourcePath =>
@@ -48,64 +93,60 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
         : '待与贵方确认：本部分内容将在进一步沟通并核对资料后完善。'
     return { ...section, blocks: [{ type: 'para', text: message }] }
   })
+  const issues = []
+  const withIssues = sections => Object.defineProperty(sections, 'generationIssues',
+    { value: [...new Set(issues)], enumerable: false })
   const sources = await readSources(ctx, agent, signal, manifest)
   const route = agent?.options
-  if (!ctx.llm?.stream || !route?.provider || !route?.model || sources.size === 0) return fallback
+  if (!ctx.llm?.stream || !route?.provider || !route?.model) {
+    issues.push('model_unavailable')
+    return withIssues(fallback)
+  }
+  if (sources.size === 0) {
+    issues.push('no_readable_source')
+    return withIssues(fallback)
+  }
   let budget = 40_000
   const limited = []
   for (const [sourcePath, content] of sources) {
     if (budget <= 0) break
-    const excerpt = content.slice(0, budget)
-    limited.push({ path: sourcePath, content: excerpt })
-    budget -= excerpt.length
+    limited.push({ path: sourcePath, content: content.slice(0, budget) })
+    budget -= content.length
   }
-  let text = ''
-  let blockText = ''
-  let finish
+  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps","text":"完整段落，仅 para 使用","items":["要点，仅 bullets/steps 使用"],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。`
+  const sections = [...fallback]
   try {
-    for await (const chunk of ctx.llm.stream({
-      provider: route.provider, model: route.model,
-      system: `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要客户确认的内容用“待与贵方确认”说明，不向客户布置内部复核任务。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的营销场景售前方案：围绕业务背景、目标客户的典型挑战、产品如何回应、营销场景、企业与服务证明展开。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战/待确认”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开来源中的产品表述须写“公开资料显示（待核实）”。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps","text":"完整段落，仅 para 使用","items":["要点，仅 bullets/steps 使用"],"path":"sources 中的路径","quote":"逐字原文片段"}]}]}。每章尽量写 2—4 个有信息量的块：先解释业务问题，再说明产品做法、适用场景或价值机制；列表和步骤用于真正适合的内容，不要一章只写一句空泛总结。每块只陈述其引用原文可支持的内容，path 必须属于本章 sourcePaths，quote 必须是该来源连续原文；没有依据的章返回空 blocks。公开资料只能作为待核实参考，推断痛点须写待验证，不能写成这个客户已发生的事实；企业产品能力要标明是内部材料还是公开介绍。不要伪造收益、案例、价格或承诺。`,
-      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }) }],
-        source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      maxTokens: 6500, signal, sessionId: agent?.session?.id,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
-      if (chunk.type === 'finish') finish = chunk.reason
-    }
-    if (finish?.kind !== 'stop') return fallback
-    const answer = parseJson(text || blockText)
-    if (!Array.isArray(answer.sections) || answer.sections.length !== outline.length) return fallback
-    return fallback.map((section, index) => {
-      const candidate = answer.sections[index]
-      if (candidate?.heading !== section.heading) return section
-      const proposed = Array.isArray(candidate.blocks) ? candidate.blocks : candidate.paragraphs
-      if (!Array.isArray(proposed)) return section
-      const blocks = proposed.slice(0, 5).flatMap(block => {
-        if (!validEvidence(block, sources) || !outline[index].sourcePaths.includes(block.path)
-          || !isReadableProse(block.quote)) return []
-        const type = block.type ?? 'para'
-        let body
-        if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
-          && !hasInternalCopy(block.text) && block.text.length <= 1200) {
-          body = { type, text: block.text.trim() }
-        } else if (['bullets', 'steps'].includes(type) && Array.isArray(block.items)
-          && block.items.length >= 2 && block.items.length <= 6
-          && block.items.every(item => isReadableProse(item) && !hasInternalCopy(item) && item.length <= 180)) {
-          body = { type, items: block.items.map(item => item.trim()) }
-        }
-        if (!body) return []
-        return [body, { type: 'quote', text: `来源：${block.path}\n${block.quote.trim()}` }]
-      })
-      const lead = typeof candidate.lead === 'string' && candidate.lead.trim().length <= 120
-        && isReadableProse(candidate.lead) && !hasInternalCopy(candidate.lead) && blocks.length
-        ? candidate.lead.trim() : undefined
-      return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
-    })
-  } catch {
-    return fallback
+    const reply = await askForJson(ctx, agent, signal, system,
+      { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }, 6500)
+    if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
+      for (const [index, candidate] of reply.value.sections.entries()) {
+        sections[index] = sectionFromCandidate(candidate, fallback[index], outline[index].sourcePaths ?? [], sources)
+      }
+    } else issues.push(reply.issue ?? 'invalid_sections')
+  } catch (error) {
+    if (signal?.aborted) throw error
+    issues.push('model_error')
   }
+  for (const [index, item] of outline.entries()) {
+    if (sections[index] !== fallback[index]) continue
+    const relevant = [...new Set(item.sourcePaths ?? [])].filter(sourcePath => sources.has(sourcePath))
+      .slice(0, 4).map((sourcePath, position) => ({ id: `S${position + 1}`,
+        name: sourcePath.split('/').at(-1), content: sources.get(sourcePath).slice(0, 7000), path: sourcePath }))
+    if (!relevant.length) continue
+    const aliases = new Map(relevant.map(source => [source.id, source.path]))
+    try {
+      const reply = await askForJson(ctx, agent, signal,
+        `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；不要编造产品能力、客户事实、收益或承诺。`,
+        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 2400)
+      const candidate = reply.value?.section ?? reply.value
+      sections[index] = sectionFromCandidate(candidate, fallback[index], item.sourcePaths ?? [], sources, aliases)
+      if (sections[index] === fallback[index]) issues.push(reply.issue ?? 'unverified_content')
+    } catch (error) {
+      if (signal?.aborted) throw error
+      issues.push('model_error')
+    }
+  }
+  return withIssues(sections)
 }
 
 /** 证据不足时仍让模型按已知材料拟具体大纲，不把“待确认”误写成客户事实。 */

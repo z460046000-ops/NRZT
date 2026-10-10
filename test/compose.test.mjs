@@ -38,6 +38,30 @@ test('正文可生成有证据的结构化要点，虚构要点被丢弃', async
   assert.equal(JSON.stringify(result).includes('九成'), false)
 })
 
+test('整稿输出被截断时按章重试，保留经过逐字引用校验的正文', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: 'CallWan 提供线索管理与客户触达。支持销售查看线索状态。' }] }
+  const outline = [
+    { heading: '产品价值', topics: ['capabilities'], sourcePaths: ['product.md'] },
+    { heading: '使用场景', topics: ['scenarios'], sourcePaths: ['product.md'] },
+  ]
+  let sectionCalls = 0
+  const ctx = { llm: { async *stream(options) {
+    if (options.system.includes('售前方案撰写员')) {
+      yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      return
+    }
+    sectionCalls++
+    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
+      text: 'CallWan 可帮助销售管理线索并查看状态。', sourceId: 'S1', quote: '支持销售查看线索状态' }] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [], { sales: true, stage: 'initial' })
+  assert.equal(sectionCalls, 2)
+  assert.equal(sections.every(section => section.blocks[0].text.includes('CallWan 可帮助销售')), true)
+  assert.equal(sections.generationIssues.includes('max-tokens'), true)
+})
+
 test('证据未能确认痛点时仍可由模型提出材料化大纲', async () => {
   const manifest = { files: [{ path: 'api.md', excerpt: '项目创建、文档上传、知识检索、方案审核接口。' }] }
   const answer = { outline: [

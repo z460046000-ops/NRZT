@@ -341,6 +341,16 @@ const OUTLINE_INSTRUCTION = '请根据下方用户已确认的大纲生成售前
  * wlyd_solution 与 wlyd_platform_render 共用。
  */
 async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets, assetViews, warnings, extraOutput }) {
+  const hasContent = solution.sections.some(section => section.blocks.some(block => {
+    if (['para', 'bullets', 'steps'].includes(block.type)) {
+      const lines = block.type === 'para' ? [block.text] : block.items
+      return lines?.some(line => typeof line === 'string' && line.trim()
+        && !/^(?:待与贵方确认|待补充并确认|尚无证据|本部分内容将在)/u.test(line.trim()))
+    }
+    return block.type === 'table' && block.rows?.length > 0
+      || block.type === 'metrics' && block.items?.length > 0
+  }))
+  if (!hasContent) throw bad('wlyd_solution', '正文只有待确认占位文案，未生成交付文件；请检查材料与模型后重试')
   if (path.isAbsolute(base) || base.split(/[\\/]/u).includes('..') || base === '.' || base === '') {
     throw bad('wlyd_solution', 'output_base 必须是当前工作区内的相对路径')
   }

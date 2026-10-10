@@ -59,7 +59,18 @@ const model = answer => ({
   async *stream(options) {
     assert.equal(options.provider, 'mock')
     assert.equal(options.model, 'mock')
-    yield { type: 'text-delta', index: 0, text: JSON.stringify(answer) }
+    let response = answer
+    if (options.system.includes('售前方案撰写员')) {
+      const input = JSON.parse(options.messages[0].content[0].text)
+      const sources = new Map(input.sources.map(source => [source.path, source.content]))
+      response = { sections: input.outline.map(item => {
+        const sourcePath = item.sourcePaths.find(candidate => sources.has(candidate))
+        const sentence = sources.get(sourcePath)?.split('。').find(piece => piece.includes('产品'))?.trim()
+        return { heading: item.heading, blocks: sentence
+          ? [{ type: 'para', text: `${sentence}。`, path: sourcePath, quote: sentence }] : [] }
+      }) }
+    }
+    yield { type: 'text-delta', index: 0, text: JSON.stringify(response) }
     yield { type: 'finish', reason: { kind: 'stop' } }
   },
 })
@@ -109,6 +120,27 @@ test('提取数量非零但正文为空时不生成空方案', async () => {
   assert.deepEqual(calls, ['wlyd_ingest'])
 })
 
+test('四章只有占位文案时不生成幻灯片，并说明正文生成失败', async () => {
+  const calls = []
+  const ctx = { llm: { async *stream() { yield { type: 'finish', reason: { kind: 'max-tokens' } } } },
+    tools: { async execute(input) {
+      calls.push(input.name)
+      if (input.name === 'wlyd_ingest') return { isError: false, value: { label: 'CallWan',
+        counts: { extracted: 1 }, files: [{ path: 'product.md', excerpt: sourceText }] } }
+      throw new Error('空稿不得调用 wlyd_solution')
+    } } }
+  const agent = { options: { provider: 'mock', model: 'mock' } }
+  const signal = new AbortController().signal
+  const question = await runPresales(ctx, agent, signal, 'product.md')
+  assert.equal(question.kind, 'question')
+  const proposed = await resumePresales(ctx, agent, signal, question.pending, '先按现有材料出大纲')
+  assert.equal(proposed.kind, 'outline')
+  const result = await resumePresales(ctx, agent, signal, proposed.pending, '确认大纲')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /没有生成空白幻灯片/u)
+  assert.deepEqual(calls, ['wlyd_ingest'])
+})
+
 test('自然语言路由和命令均经插件按导入、方案顺序执行', async () => {
   const calls = []
   const events = new Map()
@@ -126,6 +158,8 @@ test('自然语言路由和命令均经插件按导入、方案顺序执行', as
           value: { label: '样例资料', counts: { extracted: 1 }, files: [{ path: 'materials/a.md', excerpt: sourceText }] },
         }
         assert.ok(input.arguments.sections.length >= 3 && input.arguments.sections.length <= 6)
+        assert.deepEqual(Reflect.ownKeys(input.arguments.sections),
+          [...input.arguments.sections.keys()].map(String).concat('length'))
         assert.equal(input.arguments.pain_solution_links[0].id, 'P1')
         assert.equal(input.arguments.sections[1].heading, generated++ === 0 ? '问题与对应方案' : '客户问题与对应方案')
         return { isError: false, value: { markdownPath: 'solution.md', htmlPath: 'solution.html', docxPath: 'solution.docx' } }
