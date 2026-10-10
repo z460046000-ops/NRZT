@@ -418,7 +418,7 @@ async function inferReplyIntent(ctx, agent, signal, stage, answer, outline) {
       system: `你只判断当前用户回复的操作意图，不执行操作。${context} 只输出 JSON：{"intent":"${allowed.join('|')}","editInstruction":""}。用户说“不要/先别/还没”时不能判为 confirm 或 search；提到命令名称不等于要求执行。无法确定就用 clarify。`,
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: answer.slice(0, 800) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      maxTokens: 240, signal, sessionId: agent?.session?.id,
+      signal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text

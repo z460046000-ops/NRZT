@@ -92,7 +92,7 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
   return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
 }
 
-async function askForJson(ctx, agent, signal, system, input, maxTokens) {
+async function askForJson(ctx, agent, signal, system, input) {
   let supportsOff = false
   try {
     const info = await ctx.llm.resolveModelInfo?.(agent.options.provider, agent.options.model)
@@ -106,7 +106,7 @@ async function askForJson(ctx, agent, signal, system, input, maxTokens) {
       provider: agent.options.provider, model: agent.options.model, system,
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      ...(supportsOff ? { reasoningEffort: 'off' } : {}), maxTokens, signal, sessionId: agent?.session?.id,
+      ...(supportsOff ? { reasoningEffort: 'off' } : {}), signal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
@@ -162,7 +162,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
   const sections = [...fallback]
   try {
     const reply = await askForJson(ctx, agent, signal, system,
-      { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }, 20_000)
+      { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited })
     if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
       for (const [index, candidate] of reply.value.sections.entries()) {
         sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources)
@@ -182,7 +182,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     try {
       const reply = await askForJson(ctx, agent, signal,
         `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。`,
-        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 6_000)
+        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) })
       const candidate = reply.value?.section ?? reply.value
       sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)
       if (sections[index] === fallback[index]) issues.push(reply.issue ?? 'unverified_content')
@@ -214,7 +214,7 @@ export async function outlineFromMaterials(ctx, agent, signal, manifest, setting
         : '你只为售前方案设计材料驱动的大纲，不判断客户痛点是否已发生。仅输出 JSON：{"outline":[{"heading":"体现材料具体业务或能力的章节标题","topics":["context|capabilities|architecture|scenarios|implementation|service|boundary|company|custom"],"sourcePaths":["输入中的材料路径"]}]}。根据实际信息给 3—6 章，章节标题具体、彼此不重复；不能用“项目背景与目标”“产品能力与适用场景”等通用模板凑数。没有客户问题依据时，不建立客户问题与方案章，可在边界章提示尚待确认。sourcePaths 只能引用输入中的路径。只输出 JSON。',
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ sources: limited }) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      maxTokens: 1400, signal, sessionId: agent?.session?.id,
+      signal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
@@ -282,7 +282,7 @@ async function reviewMappings(ctx, agent, signal, links, sources) {
       system: '你是独立售前审稿人。逐条核对客户问题与产品做法是否处于同一场景、做法是否直接解决该问题、产品能力是否由内部资料支持。仅输出 JSON：{"pairs":[{"id":"P1","matched":true,"reason":"简短理由"}]}。推断痛点不是已证实的客户事实；公开资料不能证明本公司产品能力。无法判断或不对应时 matched=false。',
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ links, sources: [...sources].map(([path, content]) => ({ path, content: content.slice(0, 1500) })) }) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      maxTokens: 900, signal, sessionId: agent?.session?.id,
+      signal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
@@ -356,7 +356,7 @@ export async function assessMaterials(ctx, agent, signal, manifest, userNote, no
       provider: route.provider, model: route.model, system,
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: input }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      maxTokens: 2600, signal, sessionId: agent?.session?.id,
+      signal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text

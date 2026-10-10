@@ -112,13 +112,13 @@ test('整稿输出被截断时按章重试，保留经过逐字引用校验的�
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
     new AbortController().signal, manifest, outline, [], { sales: true, stage: 'initial' })
   assert.equal(sectionCalls, 2)
-  assert.equal(requests[0].maxTokens, 20_000)
-  assert.ok(requests.slice(1).every(request => request.maxTokens === 6_000 && request.reasoningEffort === 'off'))
+  assert.ok(requests.every(request => !Object.hasOwn(request, 'maxTokens')))
+  assert.ok(requests.slice(1).every(request => request.reasoningEffort === 'off'))
   assert.equal(sections.every(section => section.blocks[0].text.includes('CallWan 可帮助销售')), true)
   assert.equal(sections.generationIssues.includes('max-tokens'), true)
 })
 
-test('六章长语料整稿调用关闭思考并保留足够正文预算', async () => {
+test('六章长语料整稿调用关闭思考且不设置输出上限', async () => {
   const source = 'CallWan 支持销售查看线索状态，并把客户触达记录保存在同一项目。'.repeat(120)
   const manifest = { files: [{ path: 'product.md', excerpt: source }] }
   const outline = Array.from({ length: 6 }, (_, index) => ({
@@ -127,7 +127,7 @@ test('六章长语料整稿调用关闭思考并保留足够正文预算', async
   const calls = []
   const ctx = { llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } }, async *stream(options) {
     calls.push(options)
-    if (options.reasoningEffort !== 'off' || options.maxTokens < 20_000) {
+    if (options.reasoningEffort !== 'off' || Object.hasOwn(options, 'maxTokens')) {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
       return
     }
