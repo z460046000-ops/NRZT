@@ -1,6 +1,6 @@
 {
   "name": "@wlyd/dsh-presales-solution",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "万联智达内容中台:材料导入分析 + 售前解决方案生成(集团模板幻灯片风格,DeepSeek Harness 路线B外挂插件)",
   "license": "MIT",
   "type": "module",

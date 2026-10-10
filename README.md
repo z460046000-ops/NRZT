@@ -2,7 +2,7 @@
 
 `@wlyd/dsh-presales-solution` 是运行在 DeepSeek Harness（DSH）中的售前内容生成插件。它把企业资料、项目知识和可核对的公开背景整理为**面向客户的解决方案初稿**，并输出可编辑的 HTML 幻灯片、Markdown、Word 和结构化 JSON。目标不是机械复述资料，而是围绕“背景 → 客户挑战 → 对应做法 → 业务价值 → 适用边界”，按证据组织企业增长或协同等售前叙事。
 
-本文对应 **0.9.4** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
+本文对应 **0.9.6** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
 
 ## 运行模型
 
@@ -68,12 +68,12 @@ HTML 负责图形表达；Markdown 和 Word 把同一图表数据输出为可审
 前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.9.4.tgz` 放到本机，执行：
 
 ```sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.4.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.6.tgz"
 dsh plugin --profile web list
 dsh web
 ```
 
-若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.4`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
+若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.6`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
 
 内容中台由 **运行 DSH 的服务端**配置：
 

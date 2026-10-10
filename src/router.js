@@ -77,8 +77,16 @@ async function generateDraft(ctx, agent, signal, pending, links) {
       : issues.includes('no_readable_source') ? '导入资料中没有可用正文'
         : issues.includes('max-tokens') ? '模型输出被截断'
           : issues.includes('model_error') ? '模型调用失败'
-            : '模型正文或引用未通过校验'
-    return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 0/${sections.length} 章生成了有依据的正文，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
+            : issues.includes('invalid_json') || issues.includes('invalid_sections')
+              ? '模型返回内容不符合方案结构，未能解析出有效章节'
+              : issues.includes('unverified_content') ? '模型返回了正文，但引用未能与对应材料逐字匹配'
+                : '模型正文或引用未通过校验，具体失败类型未记录'
+    const nextStep = issues.includes('unverified_content')
+      ? '请确认知识库原文可读取，或补充产品资料后重试；为保证事实准确，本次没有放宽引用校验。'
+      : issues.includes('invalid_json') || issues.includes('invalid_sections')
+        ? '请检查当前模型的结构化输出能力后重试；也可以补充更清晰的产品与客户资料。'
+        : '请检查当前模型后重试，或补充更清晰的产品与客户资料。'
+    return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 0/${sections.length} 章生成了有依据的正文，因此没有生成空白幻灯片。原因：${reason}。${nextStep}` }
   }
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',

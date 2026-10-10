@@ -141,6 +141,28 @@ test('四章只有占位文案时不生成幻灯片，并说明正文生成失�
   assert.deepEqual(calls, ['wlyd_ingest'])
 })
 
+test('零正文时区分模型结构错误与引用未匹配', async () => {
+  const outline = [{ heading: '产品能力', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const manifest = { label: 'CallWan', counts: { extracted: 1 }, files: [
+    { path: 'product.md', excerpt: '产品提供统一资料管理。' },
+  ] }
+  const pending = { stage: 'outline', manifest, outline, links: [], runId: 'test-draft-diagnostic' }
+  const agent = { options: { provider: 'mock', model: 'mock' } }
+  const signal = new AbortController().signal
+  for (const scenario of ['invalid-json', 'unverified-quote']) {
+    const ctx = { llm: { async *stream() {
+      const text = scenario === 'invalid-json' ? '{"sections":[' : JSON.stringify({ sections: [{ heading: '产品能力',
+        blocks: [{ type: 'para', text: '产品提供统一资料管理。', path: 'product.md', quote: '资料中没有的引用' }] }] })
+      yield { type: 'text-delta', text }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } }, tools: { async execute() { throw new Error('零正文不得调用 wlyd_solution') } } }
+    const result = await resumePresales(ctx, agent, signal, pending, '确认大纲')
+    assert.equal(result.kind, 'error')
+    if (scenario === 'invalid-json') assert.match(result.text, /模型返回内容不符合方案结构/u)
+    else assert.match(result.text, /引用未能与对应材料逐字匹配/u)
+  }
+})
+
 test('列表项都是待确认文案时不把章节误判为有效正文', async () => {
   const source = '产品提供统一资料管理。'
   const outline = [
