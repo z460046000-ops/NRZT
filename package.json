@@ -15,6 +15,7 @@
   "files": [
     "bin/",
     "guides/",
+    "policies/",
     "skills/",
     "src/",
     "cordis.patch.yml"

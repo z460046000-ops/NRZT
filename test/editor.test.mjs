@@ -136,15 +136,16 @@ test('方案预览、源稿和 Word 使用同一受保护地址打开或下载',
     await writeFile(`${base}.json`, JSON.stringify(solution))
     await registerDocument(base, solution.editorId)
     let route
+    const api = new Map()
     registerEditorRoutes({
-      connection: { fetch: { register() {} }, requestRejection(req) { return req.headers['x-deny'] ? 401 : undefined } },
+      connection: { fetch: { register(definition) { api.set(definition.path, definition) } }, requestRejection(req) { return req.headers['x-deny'] ? 401 : undefined } },
       webServer: { register(definition) { route = definition; return () => {} } },
       effect(callback) { callback() },
     })
     server = createServer((req, res) => route.handler(req, res))
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
     const prefix = `http://127.0.0.1:${server.address().port}/wlyd-presales/doc/${solution.editorId}`
-    for (const file of ['solution.html', 'preview.svg', 'solution.md', 'solution.docx', 'solution.json', 'solution-assets/old.png']) {
+    for (const file of ['solution.html', 'external-preview.html', 'preview.svg', 'solution.md', 'solution.docx', 'solution.json', 'solution-assets/old.png']) {
       const response = await fetch(`${prefix}/${file}`)
       assert.equal(response.status, 200, file)
       assert.ok((await response.arrayBuffer()).byteLength > 0)
@@ -152,6 +153,24 @@ test('方案预览、源稿和 Word 使用同一受保护地址打开或下载',
         assert.match(response.headers.get('content-disposition'), /attachment/)
       }
     }
+    const release = await api.get('/api/wlyd-presales/release').fetch(new Request('http://localhost/api/wlyd-presales/release', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: solution.editorId, baseRevision: 1, confirmation: {
+        structure: true, stance: 'verified', audience: '客户负责人', distribution: 'partner',
+        factBaseline: true, version: 'V1.0', reviewer: '测试确认人', assetsApproved: true,
+        commercialApproved: true, claimsApproved: true,
+        noInternalResidue: true, noUnapprovedContent: true, planningLabeled: true,
+        boundariesVisible: true, noAutomationResidue: true, structureConsistent: true,
+        versionConsistent: true, claimStrengthChecked: true, causalChainPreserved: true,
+      } }),
+    }))
+    assert.equal(release.status, 200)
+    const released = await release.json()
+    assert.ok(released.releaseId)
+    const releasedHtml = await fetch(`http://127.0.0.1:${server.address().port}${released.urls.html}`)
+    assert.equal(releasedHtml.status, 200)
+    assert.doesNotMatch(await releasedHtml.text(), /编辑方案|查看外部稿|内部稿/u)
+    assert.equal((await fetch(`${prefix}/releases/${released.releaseId}/release-record.json`)).status, 404)
     assert.equal((await fetch(`${prefix}/missing.txt`)).status, 404)
     assert.equal((await fetch(`${prefix}/solution.html`, { headers: { 'x-deny': '1' } })).status, 401)
   } finally {

@@ -356,7 +356,7 @@ test('真实工具执行后得到可编辑源稿、预览和 Word 文件', async
     else process.env.DSH_HOME = oldHome
   }
   assert.equal(result.kind, 'success', result.text)
-  assert.match(result.text, /\[下载 Word\]\([^)]*solution\.docx\)/)
+  assert.match(result.text, /\[内部稿 Word\]\([^)]*solution\.docx\)/)
   const run = (await readdir(path.join(cwd, 'presales-runs')))[0]
   const base = `presales-runs/${run}/solution`
   assert.match(await readFile(path.join(cwd, `${base}.md`), 'utf8'), /materials\/产品介绍\.md：客户痛点是资料分散/)

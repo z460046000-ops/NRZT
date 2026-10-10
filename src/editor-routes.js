@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { EditorError, latestKnowledgeStatus, loadDocument, saveDocument } from './editor-store.js'
+import { externalPreview, publishExternalRelease, releaseFile } from './external-release.js'
 
 const PREFIX = '/wlyd-presales/doc'
 
@@ -69,6 +70,22 @@ export function registerEditorRoutes(ctx) {
     },
   })
 
+  ctx.connection.fetch.register({
+    path: '/api/wlyd-presales/release', methods: ['POST'], requestBody: 'buffered',
+    async fetch(request) {
+      try {
+        if (Number(request.headers.get('content-length') ?? 0) > 32 * 1024) {
+          throw new EditorError(413, '外发确认内容过大')
+        }
+        let body
+        try { body = await request.json() }
+        catch { throw new EditorError(400, '外发确认格式无效') }
+        const result = await publishExternalRelease(body?.id, body)
+        return Response.json(result, { headers: { 'Cache-Control': 'no-store' } })
+      } catch (error) { return errorResponse(error) }
+    },
+  })
+
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: PREFIX,
     async handler(req, res) {
@@ -88,6 +105,13 @@ export function registerEditorRoutes(ctx) {
         if (file === 'solution.html') {
           target = `${baseAbs}.html`
           contentType = 'text/html; charset=utf-8'
+        } else if (file === 'external-preview.html') {
+          const bytes = Buffer.from((await externalPreview(id)).html)
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': bytes.length, 'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff' })
+          res.end(req.method === 'HEAD' ? undefined : bytes)
+          return
         } else if (file === 'preview.svg') {
           const bytes = Buffer.from(previewSvg(solution))
           res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -99,6 +123,13 @@ export function registerEditorRoutes(ctx) {
           target = `${baseAbs}${path.extname(file)}`
           contentType = file.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
             : file.endsWith('.json') ? 'application/json; charset=utf-8' : 'text/markdown; charset=utf-8'
+        } else if (file.startsWith('releases/')) {
+          const [, releaseId, ...parts] = file.split('/')
+          const released = parts.join('/')
+          target = releaseFile(baseAbs, releaseId, released)
+          contentType = released.endsWith('.html') ? 'text/html; charset=utf-8'
+            : released.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+              : released.endsWith('.md') ? 'text/markdown; charset=utf-8' : mime(released)
         } else if (solution.assets?.some(asset => asset.fileName === file)) {
           target = path.join(path.dirname(baseAbs), `${path.basename(baseAbs)}-assets`, path.basename(file))
           contentType = mime(file)
@@ -107,8 +138,8 @@ export function registerEditorRoutes(ctx) {
         res.writeHead(200, {
           'Content-Type': contentType,
           'Content-Length': bytes.length,
-          ...(file.startsWith('solution.') && file !== 'solution.html'
-            ? { 'Content-Disposition': `attachment; filename="${file}"` } : {}),
+          ...((file.startsWith('solution.') && file !== 'solution.html') || file.startsWith('releases/') && !file.endsWith('.html') && !file.includes('/assets/')
+            ? { 'Content-Disposition': `attachment; filename="${path.basename(file)}"` } : {}),
           'Cache-Control': 'no-store',
           'X-Content-Type-Options': 'nosniff',
         })

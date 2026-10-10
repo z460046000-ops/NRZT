@@ -5,6 +5,7 @@ import { normalizeChart } from '../src/chart.js'
 import { renderHtml } from '../src/html.js'
 import { renderMarkdown } from '../src/markdown.js'
 import { renderDocx } from '../src/docx.js'
+import { externalizeSolution, visibleExternalText } from '../src/external-copy.js'
 
 const sourceText = '2024年线索 12 条；2025年线索 20 条。'
 const chart = normalizeChart({ type: 'chart', chartType: 'line', title: '线索变化', unit: '条',
@@ -40,6 +41,22 @@ test('图表在 HTML、Markdown、Word 保留相同数值与来源', async () =>
   }
   assert.match(html, /<svg[^>]+role="img"/u)
   assert.match(html, /layout-chart-wide/u)
+})
+
+test('外部稿保留图表数值但不泄露内部文件路径和引文', async () => {
+  const solution = { title: '线索方案', theme: 'corporate', meta: { company: '示例企业' },
+    sections: [{ kind: 'trends', heading: '业务趋势', blocks: [chart] }] }
+  const external = externalizeSolution(solution)
+  assert.equal(external.sections[0].blocks[0].source, undefined)
+  const html = renderHtml(external, [])
+  const md = renderMarkdown(external, [])
+  const zip = await JSZip.loadAsync(await renderDocx(external, []))
+  const word = await zip.file('word/document.xml').async('string')
+  for (const content of [html, md, word, visibleExternalText(external)]) {
+    assert.match(content, /2024年/u)
+    assert.match(content, /2025年/u)
+    assert.doesNotMatch(content, /a\.md|2024年线索 12 条/u)
+  }
 })
 
 test('同类能力页在一份方案中出现不同构图，重渲染保持稳定', () => {

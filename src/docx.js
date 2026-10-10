@@ -59,9 +59,12 @@ export async function renderDocx(solution, assets) {
       }))
     }
     if (section.kind === 'problem_solution' && solution.painSolutionLinks?.length) {
-      pushBlock(children, { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
-        rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
-          `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
+      pushBlock(children, solution.external
+        ? { type: 'table', headers: ['编号', '客户问题', '对应做法'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution]) }
+        : { type: 'table', headers: ['编号', '客户问题', '对应做法', '材料依据'],
+          rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution,
+            `${link.painEvidence.path}：${link.painEvidence.quote}；${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]) }, assetByName)
     }
     for (const block of section.blocks) {
       pushBlock(children, block, assetByName)
@@ -72,7 +75,7 @@ export async function renderDocx(solution, assets) {
   children.push(new Paragraph({
     alignment: AlignmentType.CENTER,
     children: [new TextRun({
-      text: meta.contact || meta.company || '',
+      text: solution.external ? [meta.version, meta.date].filter(Boolean).join(' · ') : meta.contact || meta.company || '',
       color: '999999', size: 18,
     })],
   }))
@@ -122,7 +125,7 @@ function pushBlock(children, block, assetByName) {
         heading: HeadingLevel.HEADING_2 }))
       children.push(makeTable(['项目', `数值（${block.unit}）`],
         block.points.map(point => [{ text: point.label }, { text: String(point.value), bold: true }])))
-      children.push(new Paragraph({ children: [new TextRun({
+      if (!block.external) children.push(new Paragraph({ children: [new TextRun({
         text: `${block.evidenceStatus === 'user_unverified' ? '原始资料（修改前）' : '数据依据'}：${block.source.path} · ${block.source.quote}`,
         italics: true, color: '666666', size: 17,
       })] }))
