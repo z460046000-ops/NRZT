@@ -78,7 +78,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
         : issues.includes('max-tokens') ? '模型输出被截断'
           : issues.includes('model_error') ? '模型调用失败'
             : '模型正文或引用未通过校验'
-    return { kind: 'error', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 ${filled}/${sections.length} 章生成了有依据的正文，未达到交付要求，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
+    return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 ${filled}/${sections.length} 章生成了有依据的正文，未达到交付要求，因此没有生成空白幻灯片。原因：${reason}。请检查当前模型后重试，或补充更清晰的产品与客户资料。` }
   }
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
@@ -332,7 +332,7 @@ async function autoPresales(ctx, agent, signal, source, config, runId) {
     }
     const outcome = await pullFromKnowledgeBase(ctx, agent, signal, config, choices[0].kb, runId,
       { product: source.product, stage: source.stage, sourceSummary: `内容中台「${choices[0].name}」` })
-    if (outcome.kind !== 'error') return outcome
+    if (outcome.kind !== 'error' || outcome.reason === 'draft_generation') return outcome
   }
   const publicManifest = await publicProductManifest(ctx, agent, signal, source.product, runId)
   const manifest = publicManifest ?? { label: source.product, counts: { extracted: 1 },

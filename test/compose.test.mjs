@@ -67,7 +67,7 @@ test('整稿输出被截断时按章重试，保留经过逐字引用校验的�
   ]
   let sectionCalls = 0
   const requests = []
-  const ctx = { llm: { async *stream(options) {
+  const ctx = { llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } }, async *stream(options) {
     requests.push(options)
     if (options.system.includes('售前方案撰写员')) {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
@@ -94,7 +94,7 @@ test('六章长语料整稿调用关闭思考并保留足够正文预算', async
     heading: `营销方案第 ${index + 1} 章`, topics: ['capabilities'], sourcePaths: ['product.md'],
   }))
   const calls = []
-  const ctx = { llm: { async *stream(options) {
+  const ctx = { llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } }, async *stream(options) {
     calls.push(options)
     if (options.reasoningEffort !== 'off' || options.maxTokens < 20_000) {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
@@ -112,6 +112,53 @@ test('六章长语料整稿调用关闭思考并保留足够正文预算', async
   assert.equal(calls.length, 1)
   assert.equal(sections.filter(section => section.blocks[0]?.text?.includes('查看线索状态')).length, 6)
   assert.deepEqual(sections.generationIssues, [])
+})
+
+test('模型未声明关闭思考时不强传参数，仍能生成正文', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: '产品提供统一资料管理。' }] }
+  const outline = [{ heading: '产品价值', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const requests = []
+  const ctx = { llm: {
+    async resolveModelInfo() { return { id: 'qifu/deepseek-v4-flash' } },
+    async *stream(options) {
+      requests.push(options)
+      yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '产品价值', blocks: [
+        { type: 'para', text: '产品帮助团队统一管理资料。', path: 'product.md', quote: '产品提供统一资料管理' },
+      ] }] }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  } }
+  const result = await composeSections(ctx, { options: { provider: 'qifu', model: 'qifu/deepseek-v4-flash' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(requests.length, 1)
+  assert.equal('reasoningEffort' in requests[0], false)
+  assert.match(result[0].blocks[0].text, /统一管理资料/u)
+})
+
+test('路由误报关闭思考能力时只重试一次默认参数', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: '产品提供统一资料管理。' }] }
+  const outline = [{ heading: '产品价值', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const requests = []
+  const ctx = { llm: {
+    async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } },
+    async *stream(options) {
+      requests.push(options)
+      if (options.reasoningEffort === 'off') {
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'UNSUPPORTED_REASONING_EFFORT' } } }
+      } else {
+        yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '产品价值', blocks: [
+          { type: 'para', text: '产品帮助团队统一管理资料。', path: 'product.md', quote: '产品提供统一资料管理' },
+        ] }] }) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+    },
+  } }
+  const result = await composeSections(ctx, { options: { provider: 'qifu', model: 'qifu/deepseek-v4-flash' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].reasoningEffort, 'off')
+  assert.equal('reasoningEffort' in requests[1], false)
+  assert.match(result[0].blocks[0].text, /统一管理资料/u)
 })
 
 test('证据未能确认痛点时仍可由模型提出材料化大纲', async () => {

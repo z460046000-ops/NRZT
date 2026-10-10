@@ -69,22 +69,34 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
 }
 
 async function askForJson(ctx, agent, signal, system, input, maxTokens) {
-  let text = ''
-  let blockText = ''
-  let finish
-  for await (const chunk of ctx.llm.stream({
-    provider: agent.options.provider, model: agent.options.model, system,
-    messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
-      source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-    reasoningEffort: 'off', maxTokens, signal, sessionId: agent?.session?.id,
-  })) {
-    if (chunk.type === 'text-delta') text += chunk.text
-    if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
-    if (chunk.type === 'finish') finish = chunk.reason
+  let supportsOff = false
+  try {
+    const info = await ctx.llm.resolveModelInfo?.(agent.options.provider, agent.options.model)
+    supportsOff = info?.reasoning?.efforts?.some(effort => effort.id === 'off') === true
+  } catch { /* 旧版 DSH 或未声明能力的模型沿用默认参数。 */ }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let text = ''
+    let blockText = ''
+    let finish
+    for await (const chunk of ctx.llm.stream({
+      provider: agent.options.provider, model: agent.options.model, system,
+      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
+        source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
+      ...(supportsOff ? { reasoningEffort: 'off' } : {}), maxTokens, signal, sessionId: agent?.session?.id,
+    })) {
+      if (chunk.type === 'text-delta') text += chunk.text
+      if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
+      if (chunk.type === 'finish') finish = chunk.reason
+    }
+    if (finish?.kind === 'error' && finish.failure?.code === 'UNSUPPORTED_REASONING_EFFORT' && supportsOff) {
+      supportsOff = false
+      continue
+    }
+    if (finish?.kind !== 'stop') return { issue: finish?.kind === 'error' ? 'model_error' : finish?.kind ?? 'no_finish' }
+    try { return { value: parseJson(text || blockText) } }
+    catch { return { issue: 'invalid_json' } }
   }
-  if (finish?.kind !== 'stop') return { issue: finish?.kind ?? 'no_finish' }
-  try { return { value: parseJson(text || blockText) } }
-  catch { return { issue: 'invalid_json' } }
+  return { issue: 'model_error' }
 }
 
 /** 从全文材料生成逐字引用支撑的段落；整稿失败后按章重试，不交付全占位方案。 */

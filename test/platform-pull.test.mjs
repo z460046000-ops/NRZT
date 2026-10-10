@@ -233,3 +233,25 @@ test('匹配知识库暂不可读时自动查公开资料并直接生成待核�
   assert.equal(generated.pain_solution_links.length, 0)
   assert.ok(generated.sections.some(section => /挑战|问题/u.test(section.heading)))
 })
+
+test('知识库已读到材料但组稿失败时保留原错误，不改用单条公开摘要', async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-auto-model-error-'))
+  const tools = toolRecorder({
+    wlyd_ingest: input => ({ isError: false, value: { label: 'CallWan', counts: { extracted: 6 },
+      files: [{ path: `${input.arguments.path}/k1-产品介绍.md`, excerpt: sourceText }] } }),
+  })
+  const ctx = { tools, fs: fsShim(), llm: { async *stream() {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MODEL_FAILED' } } }
+  } } }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
+  const routes = platformRoutes({
+    bases: [{ id: 'kb', name: 'CallWan 产品库' }],
+    knowledge: [{ id: 'k1', title: '产品介绍.md', file_type: 'md', parse_status: 'completed' }],
+  })
+  const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
+    { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
+  assert.equal(outcome.kind, 'error')
+  assert.match(outcome.text, /已读取 6 篇资料/u)
+  assert.match(outcome.text, /模型调用失败/u)
+  assert.deepEqual(tools.calls, ['wlyd_ingest'])
+})
