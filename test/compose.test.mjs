@@ -66,7 +66,9 @@ test('整稿输出被截断时按章重试，保留经过逐字引用校验的�
     { heading: '使用场景', topics: ['scenarios'], sourcePaths: ['product.md'] },
   ]
   let sectionCalls = 0
+  const requests = []
   const ctx = { llm: { async *stream(options) {
+    requests.push(options)
     if (options.system.includes('售前方案撰写员')) {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
       return
@@ -79,8 +81,37 @@ test('整稿输出被截断时按章重试，保留经过逐字引用校验的�
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
     new AbortController().signal, manifest, outline, [], { sales: true, stage: 'initial' })
   assert.equal(sectionCalls, 2)
+  assert.equal(requests[0].maxTokens, 20_000)
+  assert.ok(requests.slice(1).every(request => request.maxTokens === 6_000 && request.reasoningEffort === 'off'))
   assert.equal(sections.every(section => section.blocks[0].text.includes('CallWan 可帮助销售')), true)
   assert.equal(sections.generationIssues.includes('max-tokens'), true)
+})
+
+test('六章长语料整稿调用关闭思考并保留足够正文预算', async () => {
+  const source = 'CallWan 支持销售查看线索状态，并把客户触达记录保存在同一项目。'.repeat(120)
+  const manifest = { files: [{ path: 'product.md', excerpt: source }] }
+  const outline = Array.from({ length: 6 }, (_, index) => ({
+    heading: `营销方案第 ${index + 1} 章`, topics: ['capabilities'], sourcePaths: ['product.md'],
+  }))
+  const calls = []
+  const ctx = { llm: { async *stream(options) {
+    calls.push(options)
+    if (options.reasoningEffort !== 'off' || options.maxTokens < 20_000) {
+      yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      return
+    }
+    yield { type: 'text-delta', text: JSON.stringify({ sections: outline.map(item => ({
+      heading: item.heading, blocks: [{ type: 'para',
+        text: '销售可以查看线索状态，跟进客户触达记录。', path: 'product.md',
+        quote: 'CallWan 支持销售查看线索状态，并把客户触达记录保存在同一项目。' }],
+    })) }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'glm-5.3-flash' } },
+    new AbortController().signal, manifest, outline, [], { sales: true })
+  assert.equal(calls.length, 1)
+  assert.equal(sections.filter(section => section.blocks[0]?.text?.includes('查看线索状态')).length, 6)
+  assert.deepEqual(sections.generationIssues, [])
 })
 
 test('证据未能确认痛点时仍可由模型提出材料化大纲', async () => {

@@ -76,7 +76,7 @@ async function askForJson(ctx, agent, signal, system, input, maxTokens) {
     provider: agent.options.provider, model: agent.options.model, system,
     messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
       source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-    maxTokens, signal, sessionId: agent?.session?.id,
+    reasoningEffort: 'off', maxTokens, signal, sessionId: agent?.session?.id,
   })) {
     if (chunk.type === 'text-delta') text += chunk.text
     if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
@@ -125,7 +125,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
   const sections = [...fallback]
   try {
     const reply = await askForJson(ctx, agent, signal, system,
-      { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }, 6500)
+      { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths })), sources: limited }, 20_000)
     if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
       for (const [index, candidate] of reply.value.sections.entries()) {
         sections[index] = sectionFromCandidate(candidate, fallback[index], outline[index].sourcePaths ?? [], sources)
@@ -145,7 +145,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     try {
       const reply = await askForJson(ctx, agent, signal,
         `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。`,
-        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 2400)
+        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 6_000)
       const candidate = reply.value?.section ?? reply.value
       sections[index] = sectionFromCandidate(candidate, fallback[index], item.sourcePaths ?? [], sources, aliases)
       if (sections[index] === fallback[index]) issues.push(reply.issue ?? 'unverified_content')
