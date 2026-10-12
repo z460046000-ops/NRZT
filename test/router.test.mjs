@@ -228,6 +228,7 @@ test('有一章有据时先交付初稿，点名缺章并允许补充或公开�
       { path: 'CallWan-产品介绍.md', excerpt: source },
     ] }, outline, links: [], auto: true, stageType: 'initial' }, '确认大纲')
   assert.equal(initial.kind, 'success')
+  assert.doesNotMatch(calls.find(call => call.name === 'wlyd_solution').arguments.subtitle, /待复核|初次接触版/u)
   assert.equal(initial.pending.stage, 'draft-gaps')
   assert.deepEqual(initial.pending.missing, ['典型场景'])
   assert.match(initial.text, /搜索公开资料/u)

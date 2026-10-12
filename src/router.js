@@ -97,12 +97,15 @@ async function generateDraft(ctx, agent, signal, pending, links) {
     return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 0/${sections.length} 章生成了有依据的正文，因此没有生成空白幻灯片。原因：${reason}。${nextStep}` }
   }
   const persistStarted = Date.now()
+  const overview = sections.find(section => ['architecture', 'capabilities'].includes(section.kind))?.lead
+  const subtitle = typeof overview === 'string' && overview.length <= 90
+    ? overview : `${manifest.label}的业务场景、方案能力与实施路径`
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
     arguments: {
       // composeSections 的数组带有仅供诊断的非枚举属性；DSH 工具参数要求纯 JSON。
       title: `${manifest.label}售前解决方案`, sections: [...sections],
-      ...(pending.auto ? { subtitle: pending.stageType === 'deep' ? '深入沟通版 · 待复核' : '初次接触版 · 待复核',
+      ...(pending.auto ? { subtitle,
         meta: { product: manifest.label } } : {}),
       pain_solution_links: links,
       output_base: `${runId}/solution`,
@@ -203,7 +206,7 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
     return { kind: 'error', text: `知识库「${kb.name}」共有 ${docs.length} 条文档，但没有解析完成的。请先在平台等待解析完成，或改用本地路径。` }
   }
   if (ready.length > 400) return { kind: 'error', text: `知识库「${kb.name}」有 ${ready.length} 篇已解析文档，超过单次检索 400 篇上限；请先在平台缩小资料范围。` }
-  const topics = platformQueries(sales?.product ?? kb.name)
+  const topics = platformQueries(sales?.product ?? kb.name, sales ? 'sales' : 'general')
   const documentById = new Map(ready.map(doc => [doc.id, doc]))
   const topicResults = []
   const queryLog = []

@@ -6,6 +6,12 @@ const docs = new Map([['doc-1', { id: 'doc-1', title: 'CallWan 产品资料.md' 
 const topics = platformQueries('CallWan')
 const chunk = (id, score, extra = {}) => ({ id, knowledge_id: 'doc-1', content: `证据 ${id}`, score, ...extra })
 
+test('增长售前背景检索包含环境与趋势，协同场景不强塞营销词', () => {
+  assert.match(platformQueries('CallWan', 'sales')[0].query, /增长环境 营销趋势/u)
+  assert.doesNotMatch(platformQueries('协同工作台', 'sales')[0].query, /营销趋势/u)
+  assert.equal(platformQueries('CallWan', 'sales').length, 4)
+})
+
 test('4 个主题各自保留证据，最后用预留名额补充高分片段，总量不超过 20', () => {
   const topicResults = topics.map((topic, topicIndex) => ({
     topic,

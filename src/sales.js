@@ -39,11 +39,27 @@ export function salesOutlineCandidate(manifest, product, stage) {
     .sort((a, b) => sourcePriority(b) - sourcePriority(a))
   const business = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0).map(file => file.path)
   const all = files.filter(file => file.kind !== 'public').map(file => file.path)
+  const trend = files.filter(file => /增长环境|行业趋势|营销趋势|流量竞争|流量变化|合规治理|获客变化|AI\s*搜索|生成式搜索|内容供给.{0,12}(?:变化|压力|竞争|需求)|第一方数据.{0,12}(?:趋势|重要|变化)/u
+    .test(`${file.path} ${file.excerpt}`)).map(file => file.path)
+  const service = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0
+    && /实施|培训|运营服务|客户成功|服务保障|上线|交付/u.test(`${file.path} ${file.excerpt}`)).map(file => file.path)
   const company = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0
-    && /公司介绍|集团简介|企业介绍|服务保障|资质/u.test(`${file.path} ${file.excerpt}`))
+    && /公司介绍|集团简介|企业介绍|集团基础|业务生态|服务网络|资质/u.test(`${file.path} ${file.excerpt}`))
     .map(file => file.path)
   const publicPaths = (manifest.files ?? []).filter(file => file.kind === 'public').map(file => file.path)
   const scenario = salesScenario(manifest)
+  if (scenario === 'growth') {
+    const result = [
+      { heading: trend.length ? '增长环境与趋势' : '营销业务背景', topics: trend.length ? ['trends'] : ['context'],
+        sourcePaths: trend.length ? trend.slice(0, 4) : [...business.slice(0, 2), ...publicPaths.slice(0, 1)] },
+      { heading: '现状与挑战', topics: ['problem_solution'], sourcePaths: [...business.slice(0, 3), ...publicPaths.slice(0, 1)] },
+      { heading: '总体方案', topics: ['architecture'], sourcePaths: all.slice(0, 4) },
+      { heading: '平台能力', topics: ['capabilities', 'scenarios'], sourcePaths: all.slice(0, 4) },
+    ]
+    if (service.length) result.push({ heading: '实施与服务', topics: ['implementation', 'service'], sourcePaths: service.slice(0, 3) })
+    if (company.length) result.push({ heading: '公司介绍', topics: ['company'], sourcePaths: company.slice(0, 3) })
+    return result
+  }
   const result = [
     { heading: '业务背景与机会', topics: ['context'], sourcePaths: [...business.slice(0, 2), ...publicPaths.slice(0, 1)] },
     { heading: stage === 'deep' ? '客户现状与关键问题（待确认）' : '目标客户与典型挑战（待确认）',

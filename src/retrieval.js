@@ -1,10 +1,15 @@
 /** 售前知识库检索主题与结果覆盖策略。 */
 import { cleanMaterialText, isReadableProse } from './source-quality.js'
 
-export function platformQueries(product) {
+export function platformQueries(product, scenario = 'general') {
   const subject = String(product || '产品').trim().slice(0, 80)
+  const growth = scenario === 'sales' && !/协同|工作台|数字员工/u.test(subject)
   return [
-    { key: 'background', label: '企业背景', query: `${subject} 企业背景 产品定位 目标客户`, retryQuery: `${subject} 公司介绍 品牌业务 服务对象`, },
+    { key: 'background', label: '企业背景', query: growth
+      ? `${subject} 增长环境 营销趋势 产品定位 目标客户`
+      : `${subject} 企业背景 产品定位 目标客户`, retryQuery: growth
+      ? `${subject} 流量变化 内容供给 线索经营 合规 公司介绍`
+      : `${subject} 公司介绍 品牌业务 服务对象`, },
     { key: 'pain', label: '客户问题', query: `${subject} 客户痛点 业务挑战 对应解决方案`, retryQuery: `${subject} 客户遇到的问题 经营难题 业务需求`, },
     { key: 'capability', label: '产品能力', query: `${subject} 产品能力 功能 营销场景 使用方式`, retryQuery: `${subject} 产品功能 核心模块 能解决什么问题`, },
     { key: 'implementation', label: '实施场景', query: `${subject} 实施部署 服务保障 适用边界`, retryQuery: `${subject} 如何落地 实施流程 服务范围 适用条件`, },

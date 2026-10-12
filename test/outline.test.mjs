@@ -53,6 +53,12 @@ test('模型大纲按节抢救：标题保留、无效来源只过滤路径、�
     { heading: '风险与限制说明', topics: ['不存在的主题'], sourcePaths: [] },
   ])
   assert.ok(guessed.find(s => s.heading === '风险与限制说明').topics.includes('boundary'))
+  const salesHeadings = suggestOutline(manifest, links, [
+    { heading: '现状与挑战', sourcePaths: ['a.md'] },
+    { heading: '总体方案', sourcePaths: ['a.md'] },
+    { heading: '平台能力', sourcePaths: ['a.md'] },
+  ])
+  assert.ok(salesHeadings.find(s => s.heading === '总体方案').topics.includes('architecture'))
   assert.ok(suggestOutline(manifest, links, candidate.slice(0, 1)).length >= 3)
   assert.deepEqual(suggestOutline(manifest, links, candidate.map((s, i) => ({ ...s, heading: `${i + 1}. ${s.heading}` }))).map(s => s.heading), candidate.map(s => s.heading))
 })

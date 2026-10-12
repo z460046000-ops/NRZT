@@ -24,6 +24,7 @@ const KEYWORDS = [
 const TOPIC_HINTS = [
   ['implementation', /实施|部署|上线|交付|培训|计划|路径|流程/u],
   ['boundary', /限制|边界|不支持|适用|风险|待确认|条件/u],
+  ['architecture', /总体方案|方案架构/u],
   ['problem_solution', /痛点|问题|方案|解决|对应|挑战/u],
   ['company', /公司|集团|资质|品牌|介绍/u],
   ['architecture', /架构|组成|层次|模块/u],
@@ -45,7 +46,7 @@ function paths(manifest) { return (manifest.files ?? []).filter(file => file.exc
 function entry(heading, topics, sourcePaths) { return { id: randomUUID(), heading, topics, sourcePaths: unique(sourcePaths) } }
 
 const CHUNK_TOPICS = {
-  context: ['background'], problem_solution: ['pain', 'capability'],
+  context: ['background'], trends: ['background'], problem_solution: ['pain', 'capability'],
   capabilities: ['capability'], architecture: ['capability'], scenarios: ['capability', 'implementation'],
   implementation: ['implementation'], service: ['implementation'], company: ['background'], boundary: ['implementation'],
 }

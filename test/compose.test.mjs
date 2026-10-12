@@ -17,6 +17,43 @@ test('按材料区分增长与协同叙事，公开摘要不能作为产品能�
   assert.ok(outline[2].sourcePaths.every(value => !value.startsWith('公开资料')))
 })
 
+test('增长材料覆盖六段售前叙事；趋势和公司来源各自限定', () => {
+  const manifest = { files: [
+    { path: 'trend.md', excerpt: '增长环境与趋势：营销获客入口变化，内容供给和线索经营需要协同。' },
+    { path: 'product.md', excerpt: 'CallWan 支持内容生产和线索管理，回应多渠道信号难统一承接的问题。' },
+    { path: 'service.md', excerpt: '实施与服务包括咨询、培训和客户成功。' },
+    { path: 'company.md', excerpt: '公司介绍：集团服务网络和业务生态。' },
+    { path: 'public', excerpt: '营销行业趋势。', kind: 'public' },
+  ] }
+  const outline = salesOutlineCandidate(manifest, 'CallWan', 'initial')
+  assert.deepEqual(outline.map(section => section.heading), [
+    '增长环境与趋势', '现状与挑战', '总体方案', '平台能力', '实施与服务', '公司介绍',
+  ])
+  assert.ok(outline[0].sourcePaths.includes('trend.md'))
+  assert.deepEqual(outline.at(-1).sourcePaths, ['company.md'])
+  assert.ok(outline[2].sourcePaths.every(source => source !== 'public'))
+})
+
+test('模型漏掉已有依据的趋势章时，自动补足主题和来源', async () => {
+  const manifest = { files: [
+    { path: 'trend.md', excerpt: '增长环境与趋势：流量竞争和营销内容供给发生变化。' },
+    { path: 'product.md', excerpt: '产品提供内容生产与线索管理能力。' },
+  ] }
+  const ctx = { llm: { async *stream() {
+    yield { type: 'text-delta', text: JSON.stringify({ outline: [
+      { heading: '业务背景', topics: ['context'], sourceIds: ['K2'] },
+      { heading: '现状与挑战', topics: ['problem_solution'], sourceIds: ['K1'] },
+      { heading: '平台能力', topics: ['capabilities'], sourceIds: ['K2'] },
+    ] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const outline = await outlineFromMaterials(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, { sales: true, product: 'CallWan', stage: 'initial' })
+  assert.equal(outline[0].heading, '业务背景')
+  assert.ok(outline[0].topics.includes('trends'))
+  assert.ok(outline[0].sourcePaths.includes('trend.md'))
+})
+
 test('模型把公开摘要写成产品能力时由代码拒绝', async () => {
   const sourcePath = '公开资料（待核实）[1] https://example.com'
   const excerpt = '某行业企业采用统一资料管理。'
@@ -333,13 +370,15 @@ test('售前营销正文由模型归纳，技术接口目录不能覆盖客户�
   assert.equal(outline.length >= 4, true)
   assert.ok(outline.every(item => !/接口|参数|API/iu.test(item.heading)))
   assert.ok(outline.some(item => item.topics.includes('problem_solution')))
-  assert.match(prompts[0], /标题只讲一个判断/u)
+  assert.match(prompts[0], /标题以可理解为先/u)
+  assert.match(prompts[0], /增长环境与趋势→现状与挑战→总体方案/u)
   const sections = await composeSections(ctx, route, new AbortController().signal, manifest,
     [{ heading: 'CallWan 的营销价值', topics: ['capabilities'], sourcePaths: ['CallWan-产品介绍.md'] }],
     [], { sales: true, stage: 'initial' })
   assert.match(sections[0].blocks[0].text, /工作链路/)
   assert.match(sections[0].blocks[1].text, /来源：CallWan-产品介绍.md/)
-  assert.match(prompts[1], /每段以 1—2 个短句为主/u)
+  assert.match(prompts[1], /正文多用短句.*场景、对象和因果/u)
+  assert.match(prompts[1], /第一次接触产品的读者知道产品是什么/u)
   assert.match(prompts[1], /避免.*全链路闭环/u)
   assert.match(prompts[0], /每句话增加信息/u)
   assert.match(prompts[1], /不固定章节或强制四字对仗/u)
