@@ -110,3 +110,14 @@ test('文案与样式是独立运行时 Skill，随插件注册', async () => {
   assert.match(skills[0].content, /字段级校对/u)
   assert.match(skills[1].content, /设计/u)
 })
+
+test('图表数字的人工修改直接关联对应数据表单，原始证据不变', () => {
+  const source = prepareSolution({ title: '数据示例', meta: {}, theme: 'corporate', sections: [{ kind: 'capabilities', heading: '季度数量', blocks: [
+    { type: 'chart', chartType: 'bar', title: '季度数量', unit: '条', points: [{ label: '第一季度', value: 12 }, { label: '第二季度', value: 20 }],
+      source: { path: 'a.md', quote: '第一季度 12 条，第二季度 20 条。' }, evidenceStatus: 'user_unverified' },
+  ] }], copyReview: [{ path: 'blocks/block-0-0/chart/1/value', status: 'pending', value: '20', original: '18', reason: '人工修改，需要核对' }] })
+  const html = renderHtml(source, [])
+  assert.match(html, /data-edit-path="blocks\/block-0-0\/chart\/1\/value"/u)
+  assert.equal(source.sections[0].blocks[0].source.quote, '第一季度 12 条，第二季度 20 条。')
+  assert.match(html, /\[data-edit-path\]/u)
+})

@@ -575,7 +575,7 @@ ${solution.editorId ? '<div id="save-notice" class="save-notice" role="status" h
   document.getElementById('next-slide').addEventListener('click', () => show(active ? active + 1 : 1));
 ${sourceToggleScript}
   document.addEventListener('keydown', event => {
-    if (event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable]')) return;
+    if (event.target instanceof Element && event.target.closest('input,textarea,select,[contenteditable],[data-edit-path]')) return;
     if (['ArrowRight','ArrowDown','PageDown',' '].includes(event.key)) { event.preventDefault(); show(active ? active + 1 : 1); }
     if (['ArrowLeft','ArrowUp','PageUp'].includes(event.key)) { event.preventDefault(); show(active ? active - 1 : 1); }
     if (event.key === 'Home') { event.preventDefault(); show(1); }
