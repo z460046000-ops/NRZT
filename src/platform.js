@@ -97,17 +97,21 @@ async function authorizedFetch(cfg, makeRequest, timeoutMs = 30000, signal) {
   return response
 }
 
-async function request(cfg, method, path, body, timeoutMs) {
+async function request(cfg, method, path, body, timeoutMs, signal) {
   const response = await authorizedFetch(cfg, (token, tenantId) => new Request(cfg.baseUrl + path, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, Authorization: `Bearer ${token}` },
     body: body === undefined ? undefined : JSON.stringify(body),
-  }), timeoutMs)
+  }), timeoutMs, signal)
   const json = await response.json().catch(() => ({}))
   if (!response.ok || json.success === false) {
-    const code = typeof json.code === 'string' ? ` (${json.code})` : ''
+    const error = json.error && typeof json.error === 'object' ? json.error : {}
+    const rawCode = json.code ?? error.code
+    const code = typeof rawCode === 'string' || typeof rawCode === 'number' ? ` (${rawCode})` : ''
+    const message = typeof json.message === 'string' ? json.message
+      : typeof error.message === 'string' ? error.message : ''
     const requestId = response.headers.get('x-request-id')
-    throw fail(`${method} ${path} -> HTTP ${response.status}${code}${requestId ? `，请求 ID ${requestId}` : ''}`)
+    throw fail(`${method} ${path} -> HTTP ${response.status}${code}${message ? `：${message}` : ''}${requestId ? `，请求 ID ${requestId}` : ''}`)
   }
   return json
 }
@@ -276,6 +280,21 @@ export async function listKnowledge(cfg, kbId) {
     fileType: String(item.file_type ?? ''),
     parseStatus: String(item.parse_status ?? ''),
   }))
+}
+
+/**
+ * 在指定知识库执行向量 + 关键词混合检索。
+ * @param {object} cfg - resolvePlatformConfig 产物。
+ * @param {string} kbId - 已授权的知识库 ID。
+ * @param {{query_text: string, match_count?: number, knowledge_ids?: string[], skip_context_enrichment?: boolean}} params - 检索条件。
+ * @param {AbortSignal} [signal] - 取消信号。
+ * @returns {Promise<Array<object>>} WeKnora SearchResult 列表。
+ */
+export async function hybridSearchKnowledge(cfg, kbId, params, signal) {
+  const response = await request(cfg, 'POST',
+    `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/hybrid-search`, params, 60000, signal)
+  if (!Array.isArray(response.data)) throw fail('hybrid-search 响应异常: data 不是数组')
+  return response.data
 }
 
 async function pagedList(cfg, endpoint) {

@@ -3,9 +3,9 @@ import { access, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { assessMaterials, composeSections, outlineFromMaterials } from './content.js'
 import { editOutline, formatOutline, savePending, sectionsFromOutline, suggestOutline } from './outline.js'
-import { downloadKnowledgeFile, listKnowledge, listKnowledgeBases, listProjectKnowledgeBases, listProjects, resolvePlatformConfig, safeFileName } from './platform.js'
-import { extractBinaryText } from './ingest.js'
+import { hybridSearchKnowledge, listKnowledge, listKnowledgeBases, listProjectKnowledgeBases, listProjects, resolvePlatformConfig } from './platform.js'
 import { salesRequest } from './sales.js'
+import { balanceRetrievalResults, platformQueries, retrievalCoverageText } from './retrieval.js'
 
 const TRIGGER = '售前解决方案'
 const PATH_FIELD = /(?:材料(?:路径)?|path)\s*[:：=]\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s，,。；;]+))/iu
@@ -113,9 +113,13 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const delivery = webBase
     ? `![方案结构预览](${webBase}preview.svg)\n\n[打开内部稿并编辑](${value.editUrl}) · [内部稿 Word](${webBase}solution.docx) · [内部稿 Markdown](${webBase}solution.md) · [内部 JSON 源稿](${webBase}solution.json)\n\n外发请在内部稿右下角选择“查看外部稿”，完成检查后下载独立的外发文件。`
     : `内部稿 HTML：${value.editUrl}；内部稿 Markdown：${value.markdownPath}；内部稿 Word：${value.docxPath}`
+  const intro = pending.auto
+    ? `已自动检索资料，按${pending.stageType === 'deep' ? '深入接触' : '初次接触'}场景生成初稿；可继续补充客户信息或直接编辑。${pending.sourceSummary ? `\n\n**资料来源与检索覆盖**：${pending.sourceSummary}` : ''}`
+    : '已按确认大纲生成初稿，请先预览和复核。'
+  const retrievalNote = !pending.auto && pending.sourceSummary ? `\n\n**检索覆盖**：${pending.sourceSummary}` : ''
   return {
     kind: 'success',
-    text: `## ${manifest.label}售前解决方案\n\n${pending.auto ? `已自动检索资料，按${pending.stageType === 'deep' ? '深入接触' : '初次接触'}场景生成初稿；可继续补充客户信息或直接编辑。${pending.sourceSummary ? `\n\n**资料来源**：${pending.sourceSummary}` : ''}` : '已按确认大纲生成初稿，请先预览和复核。'}\n\n${delivery}\n\n**内容结构** · ${sections.length} 章\n\n${sections.map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
+    text: `## ${manifest.label}售前解决方案\n\n${intro}${retrievalNote}\n\n${delivery}\n\n**内容结构** · ${sections.length} 章\n\n${sections.map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
       + (links.length ? `**证据状态**：${links.length} 组问题与做法已逐项对应，仍需人工复核后使用。`
         : '**证据状态**：客户问题与做法尚无可靠对应关系，相关内容待确认，暂不作为完整方案对外使用。')
       + (missing.length ? `\n\n**本版仍需补充**：${missing.join('、')}。这是一份可继续编辑的初稿，含待确认内容，不能直接外发。你可以在输入框补充目标客户、实际问题、场景或产品已验证能力；也可以回复“搜索公开资料”，让我只补行业背景与典型问题。补充后会另存新版。` : ''),
@@ -187,48 +191,101 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
   if (ready.length === 0) {
     return { kind: 'error', text: `知识库「${kb.name}」共有 ${docs.length} 条文档，但没有解析完成的。请先在平台等待解析完成，或改用本地路径。` }
   }
-  if (ready.length > 400) return { kind: 'error', text: `知识库「${kb.name}」有 ${ready.length} 篇已解析文档，超过单次读取 400 篇上限；请先在平台缩小资料范围。` }
-  const dirName = `${runId}/platform-materials/${kb.id.replace(/[^a-zA-Z0-9-]/gu, '_')}`
-  const warnings = []
-  const saved = []
-  let totalBytes = 0
+  if (ready.length > 400) return { kind: 'error', text: `知识库「${kb.name}」有 ${ready.length} 篇已解析文档，超过单次检索 400 篇上限；请先在平台缩小资料范围。` }
+  const topics = platformQueries(sales?.product ?? kb.name)
+  const documentById = new Map(ready.map(doc => [doc.id, doc]))
+  const topicResults = []
+  const queryLog = []
   try {
-    for (const doc of ready) {
-      const file = await downloadKnowledgeFile(cfg, doc.id, signal)
-      totalBytes += file.bytes.length
-      if (totalBytes > 100 * 1024 * 1024) throw new Error('本轮知识文档总量超过 100MB，请缩小资料范围')
-      const originalType = (doc.fileType || path.extname(doc.title).slice(1)).toLowerCase()
-      let content
-      let name = safeFileName(doc.title, originalType)
-      if (['pdf', 'docx', 'pptx'].includes(originalType)) {
-        content = (await extractBinaryText(originalType, file.bytes)).text
-        name = `${path.parse(name).name}.md`
-      } else if (['md', 'markdown', 'txt', 'csv', 'json', 'html', 'htm', 'xml', 'yaml', 'yml', 'log'].includes(originalType)) {
-        content = file.bytes.toString('utf8')
-      } else {
-        warnings.push(`${doc.title} 格式 ${originalType || '未知'} 暂不支持，已跳过`)
-        continue
-      }
-      if (!content.trim()) {
-        warnings.push(`${doc.title} 内容为空，已跳过`)
-        continue
-      }
-      const relative = `${dirName}/${doc.id.replace(/[^a-zA-Z0-9-]/gu, '_')}-${name}`
-      // 经 ctx.fs 写入,统一受 workspace-write 沙箱约束;绕开它会静默写进会话工作区之外。
-      const target = await ctx.fs.resolve(relative, { cwd, signal })
-      await ctx.fs.writeText(target, content, undefined, signal)
-      saved.push(relative)
+    const resultSets = await Promise.all(topics.map(topic => hybridSearchKnowledge(cfg, kb.id, {
+      query_text: topic.query,
+      match_count: 6,
+      knowledge_ids: ready.map(doc => doc.id),
+      skip_context_enrichment: true,
+    }, signal)))
+    for (let index = 0; index < topics.length; index++) {
+      topicResults.push({ topic: topics[index], results: resultSets[index] })
+      queryLog.push({ topic: topics[index].key, label: topics[index].label, attempt: 1, query: topics[index].query,
+        hitCount: resultSets[index].filter(result => {
+          const knowledgeId = String(result.knowledge_id ?? result.knowledgeId ?? '').trim()
+          return String(result.id ?? result.chunk_id ?? '').trim() && String(result.content ?? result.matched_content ?? '').trim()
+            && documentById.has(knowledgeId)
+        }).length })
+    }
+    const missingTopics = topicResults.filter(({ topic, results }) => !results.some(result => {
+      const knowledgeId = String(result.knowledge_id ?? result.knowledgeId ?? '').trim()
+      return String(result.id ?? result.chunk_id ?? '').trim() && String(result.content ?? result.matched_content ?? '').trim()
+        && documentById.has(knowledgeId)
+    }))
+    const retrySets = await Promise.all(missingTopics.map(({ topic }) => hybridSearchKnowledge(cfg, kb.id, {
+      query_text: topic.retryQuery,
+      match_count: 6,
+      knowledge_ids: ready.map(doc => doc.id),
+      skip_context_enrichment: true,
+    }, signal)))
+    for (let index = 0; index < missingTopics.length; index++) {
+      const topic = missingTopics[index].topic
+      const result = topicResults.find(item => item.topic.key === topic.key)
+      result.results = [...result.results, ...retrySets[index]]
+      queryLog.push({ topic: topic.key, label: topic.label, attempt: 2, query: topic.retryQuery,
+        hitCount: retrySets[index].filter(row => {
+          const knowledgeId = String(row.knowledge_id ?? row.knowledgeId ?? '').trim()
+          return String(row.id ?? row.chunk_id ?? '').trim() && String(row.content ?? row.matched_content ?? '').trim()
+            && documentById.has(knowledgeId)
+        }).length })
     }
   } catch (err) {
     if (signal.aborted) throw err
-    return { kind: 'error', text: `下载知识文档失败：${err instanceof Error ? err.message : String(err)}` }
+    return { kind: 'error', text: `知识库「${kb.name}」混合检索失败：${err instanceof Error ? err.message : String(err)}` }
   }
-  if (saved.length === 0) {
-    return { kind: 'error', text: `知识库「${kb.name}」的文档均无可拉取正文。请检查平台文档内容，或改用本地路径。` }
+  const { results: selectedChunks, coverage } = balanceRetrievalResults(topicResults, documentById)
+  if (selectedChunks.length === 0) {
+    return { kind: 'error', text: `知识库「${kb.name}」有 ${ready.length} 篇已解析文档，但混合检索没有返回可用片段。请检查知识库索引和检索接口配置。` }
   }
-  const outcome = await ingestAndAssess(ctx, agent, signal, dirName, sales?.product ?? `内容中台·${kb.name}`, runId, sales)
-  if (warnings.length > 0 && (outcome.kind === 'outline' || outcome.kind === 'question')) {
-    outcome.text = `已拉取 ${saved.length} 篇文档（${warnings.join('；')}）。\n${outcome.text}`
+  const safeTitle = value => String(value || '未命名资料').replace(/[\\/:*?"<>|\r\n]+/gu, '_').slice(0, 100)
+  const files = selectedChunks.map(chunk => {
+    const doc = documentById.get(chunk.knowledge_id)
+    const title = safeTitle(chunk.knowledge_title ?? chunk.knowledge_filename ?? doc.title)
+    const position = Number.isInteger(chunk.chunk_index) ? chunk.chunk_index + 1
+      : Number.isInteger(chunk.seq) ? chunk.seq + 1 : undefined
+    const locator = position ? `第 ${position} 段` : '分块'
+    return {
+      path: `内容中台「${kb.name}」/${title} · ${locator} [chunk:${chunk.id}]`,
+      excerpt: chunk.content.slice(0, 6_000),
+      kind: 'platform-chunk',
+      knowledgeId: chunk.knowledge_id,
+      knowledgeTitle: title,
+      chunkId: chunk.id,
+      chunkIndex: position,
+      score: Number.isFinite(Number(chunk.score)) ? Number(chunk.score) : undefined,
+      topics: chunk.topics,
+      topicLabels: chunk.topicLabels,
+    }
+  })
+  const snapshotPath = `${runId}/research/retrieval-snapshot.json`
+  const snapshotTarget = await ctx.fs.resolve(snapshotPath, { cwd, signal })
+  await ctx.fs.writeText(snapshotTarget, JSON.stringify({
+    knowledgeBaseId: kb.id, knowledgeBaseName: kb.name, retrievedAt: new Date().toISOString(), queries: queryLog,
+    coverage, selectedCount: files.length,
+    results: files.map(({ path: sourcePath, excerpt, ...source }) => ({ ...source, path: sourcePath, content: excerpt })),
+  }, null, 2) + '\n', undefined, signal)
+  const manifest = {
+    label: sales?.product ?? `内容中台·${kb.name}`,
+    files,
+    counts: { extracted: new Set(files.map(file => file.knowledgeId)).size, chunks: files.length },
+    retrievalSnapshotPath: snapshotPath,
+    retrievalCoverage: coverage,
+  }
+  let outcome
+  if (sales) {
+    outcome = await generateSalesDraft(ctx, agent, signal, manifest, runId,
+      { ...sales, product: sales.product ?? manifest.label,
+        sourceSummary: [sales.sourceSummary ?? `内容中台「${kb.name}」混合检索（${files.length} 个片段）`, retrievalCoverageText(coverage)].filter(Boolean).join('；') })
+  } else {
+    const pending = { stage: 'evidence', manifest, runId, sourceSummary: retrievalCoverageText(coverage) }
+    const assessment = await assessMaterials(ctx, agent, signal, manifest)
+    if (assessment.kind === 'question') return { kind: 'question', text: assessment.question, pending }
+    outcome = propose(pending, assessment.links, assessment.outline)
   }
   return outcome
 }

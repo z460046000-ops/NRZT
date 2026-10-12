@@ -89,35 +89,43 @@ const jsonResponse = body => new Response(JSON.stringify(body), { status: 200, h
 
 const CONFIG = { baseUrl: 'http://platform.test', email: 'a@b.c', password: 'p', tenantId: '1' }
 
-function platformRoutes({ bases, knowledge, projects = [{ id: 'p1', name: '售前项目' }], bindings = [{ knowledge_base_id: 'kb' }] }) {
+function platformRoutes({ bases, knowledge, hybridResults, hybridFailure,
+  projects = [{ id: 'p1', name: '售前项目' }], bindings = [{ knowledge_base_id: 'kb' }] }) {
+  const results = hybridResults ?? [{ id: 'chunk-1', knowledge_id: knowledge?.[0]?.id ?? 'k1',
+    knowledge_title: knowledge?.[0]?.title ?? '产品介绍.md', chunk_index: 0, score: 0.91, content: sourceText }]
   return [
     ['http://platform.test/api/v1/auth/login', () => jsonResponse({ token: 't', refresh_token: '' })],
     ['http://platform.test/api/v1/solutions/projects/p1/knowledge-bases', () => jsonResponse({ success: true, data: bindings })],
     ['http://platform.test/api/v1/solutions/projects', () => jsonResponse({ success: true, data: projects })],
     ['http://platform.test/api/v1/knowledge-bases/kb/knowledge', () => jsonResponse({ success: true, data: knowledge, total: knowledge.length })],
     ['http://platform.test/api/v1/knowledge-bases/kb2/knowledge', () => jsonResponse({ success: true, data: knowledge, total: knowledge.length })],
+    ['http://platform.test/api/v1/knowledge-bases/kb/hybrid-search', async (url, input) => {
+      assert.equal(input.method, 'POST')
+      const body = await input.clone().json()
+      assert.equal(body.match_count, 6)
+      assert.equal(body.skip_context_enrichment, true)
+      assert.match(body.query_text, /CallWan|联调资料库|产品库|公司库/u)
+      if (hybridFailure) return hybridFailure()
+      return jsonResponse({ success: true, data: typeof hybridResults === 'function' ? hybridResults(body) : results })
+    }],
+    ['http://platform.test/api/v1/knowledge-bases/kb2/hybrid-search', () => jsonResponse({ success: true, data: results })],
     ['http://platform.test/api/v1/knowledge-bases?', () => jsonResponse({ success: true, data: bases })],
     ['http://platform.test/api/v1/knowledge/k1/download', () => new Response(`# 产品介绍\n${sourceText}\n`, { status: 200 })],
   ]
 }
 
-test('内容中台来源：拉取唯一知识库的已完成文档并进入统一导入链路', async () => {
+test('内容中台来源：混合检索返回可核对的 chunk 引用，不下载整篇文档', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-platform-pull-'))
-  let stagedPath
-  const tools = toolRecorder({
-    wlyd_ingest: input => {
-      stagedPath = input.arguments.path
-      assert.match(input.arguments.path, /^presales-runs\/[^/]+\/platform-materials\/kb$/)
-      assert.equal(input.arguments.label, '内容中台·联调资料库')
-      return { isError: false, value: { label: input.arguments.label, counts: { extracted: 1 }, files: [{ path: `${input.arguments.path}/k1-产品介绍.md`, excerpt: sourceText }] } }
-    },
-  })
+  const tools = toolRecorder({})
+  const judgeEvidence = options => {
+    const { sources } = JSON.parse(options.messages[0].content[0].text)
+    const sourcePath = sources[0].path
+    return { decision: 'ready', links: [{ pain: '资料分散查找费时', solution: '统一资料管理集中沉淀',
+      painEvidence: { path: sourcePath, quote: '客户痛点是资料分散' },
+      solutionEvidence: { path: sourcePath, quote: '产品提供统一资料管理' } }] }
+  }
   const ctx = {
-    llm: judge([() => ({ decision: 'ready', links: [{
-      pain: '资料分散查找费时', solution: '统一资料管理集中沉淀',
-      painEvidence: { path: `${stagedPath}/k1-产品介绍.md`, quote: '客户痛点是资料分散' },
-      solutionEvidence: { path: `${stagedPath}/k1-产品介绍.md`, quote: '产品提供统一资料管理' },
-    }] })]),
+    llm: judge([judgeEvidence]),
     tools,
     fs: fsShim(),
   }
@@ -128,22 +136,57 @@ test('内容中台来源：拉取唯一知识库的已完成文档并进入统�
   })
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal, { kind: 'platform' }, CONFIG))
   assert.equal(outcome.kind, 'outline', outcome.text)
-  assert.equal(await readFile(path.join(cwd, stagedPath, 'k1-产品介绍.md'), 'utf8'), `# 产品介绍\n${sourceText}\n`)
-  assert.deepEqual(tools.calls, ['wlyd_ingest'])
+  assert.match(outcome.text, /chunk-1/u)
+  const snapshot = JSON.parse(await readFile(path.join(cwd, outcome.pending.runId, 'research/retrieval-snapshot.json'), 'utf8'))
+  assert.equal(snapshot.results[0].chunkId, 'chunk-1')
+  assert.equal(snapshot.results[0].knowledgeId, 'k1')
+  assert.deepEqual(tools.calls, [])
+})
+
+test('内容中台来源：主题无命中时换问法重试，并在生成结果展示覆盖情况', async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-platform-retry-'))
+  const seen = []
+  const tools = toolRecorder({
+    wlyd_solution: () => ({ isError: false, value: {
+      markdownPath: 'solution.md', docxPath: 'solution.docx', editUrl: 'http://localhost/solution.html',
+    } }),
+  })
+  const ctx = { tools, fs: fsShim(), llm: salesDraftModel }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
+  const routes = platformRoutes({
+    bases: [{ id: 'kb', name: 'CallWan 产品库' }],
+    knowledge: [{ id: 'k1', title: '产品介绍.md', file_type: 'md', parse_status: 'completed' }],
+    hybridResults: body => {
+      seen.push(body.query_text)
+      if (/客户痛点/u.test(body.query_text)) return []
+      if (/遇到的问题/u.test(body.query_text)) return [{ id: 'retry-pain', knowledge_id: 'k1', content: sourceText, score: 0.81 }]
+      return [{ id: `hit-${seen.length}`, knowledge_id: 'k1', content: sourceText, score: 0.9 }]
+    },
+  })
+  const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
+    { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
+  assert.equal(outcome.kind, 'success', outcome.text)
+  assert.equal(seen.length, 5)
+  assert.ok(seen.some(query => /遇到的问题/u.test(query)))
+  assert.match(outcome.text, /客户问题 [1-4] 条/u)
+  const runs = await readdir(path.join(cwd, 'presales-runs'))
+  const snapshot = JSON.parse(await readFile(path.join(cwd, 'presales-runs', runs[0], 'research/retrieval-snapshot.json'), 'utf8'))
+  assert.ok(snapshot.queries.some(query => query.attempt === 2 && query.topic === 'pain'))
+  assert.ok(snapshot.results.some(result => result.chunkId === 'retry-pain' && result.topics.includes('pain')))
 })
 
 test('内容中台来源：多个知识库先出编号问题，回复编号后继续拉取', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-platform-pick-'))
-  let stagedPath
-  const tools = toolRecorder({
-    wlyd_ingest: input => { stagedPath = input.arguments.path; return { isError: false, value: { label: input.arguments.label, counts: { extracted: 1 }, files: [{ path: `${stagedPath}/k1-产品介绍.md`, excerpt: sourceText }] } } },
-  })
+  const tools = toolRecorder({})
+  const judgeEvidence = options => {
+    const { sources } = JSON.parse(options.messages[0].content[0].text)
+    const sourcePath = sources[0].path
+    return { decision: 'ready', links: [{ pain: '资料分散查找费时', solution: '统一资料管理集中沉淀',
+      painEvidence: { path: sourcePath, quote: '客户痛点是资料分散' },
+      solutionEvidence: { path: sourcePath, quote: '产品提供统一资料管理' } }] }
+  }
   const ctx = {
-    llm: judge([() => ({ decision: 'ready', links: [{
-      pain: '资料分散查找费时', solution: '统一资料管理集中沉淀',
-      painEvidence: { path: `${stagedPath}/k1-产品介绍.md`, quote: '客户痛点是资料分散' },
-      solutionEvidence: { path: `${stagedPath}/k1-产品介绍.md`, quote: '产品提供统一资料管理' },
-    }] })]),
+    llm: judge([judgeEvidence]),
     tools,
     fs: fsShim(),
   }
@@ -164,8 +207,7 @@ test('内容中台来源：多个知识库先出编号问题，回复编号后�
     const outcome = await resumePresales(ctx, agent, signal, question.pending, '1', CONFIG)
     assert.equal(outcome.kind, 'outline', outcome.text)
   })
-  assert.equal(await readFile(path.join(cwd, stagedPath, 'k1-产品介绍.md'), 'utf8'), `# 产品介绍\n${sourceText}\n`)
-  assert.deepEqual(tools.calls, ['wlyd_ingest'])
+  assert.deepEqual(tools.calls, [])
 })
 
 test('内容中台来源：没有解析完成的文档时明确报错，不进入生成', async () => {
@@ -184,12 +226,42 @@ test('内容中台来源：没有解析完成的文档时明确报错，不进�
   assert.equal((await readdir(cwd)).includes('presales-runs'), false)
 })
 
+test('内容中台来源：混合检索无命中时明确提示检查索引，不退回全文下载', async () => {
+  const tools = toolRecorder({})
+  const ctx = { llm: judge([]), tools }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd: os.tmpdir() } } }
+  const routes = platformRoutes({
+    bases: [{ id: 'kb', name: '联调资料库' }],
+    knowledge: [{ id: 'k1', title: '产品资料.md', file_type: 'md', parse_status: 'completed' }],
+    hybridResults: [],
+  })
+  const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal, { kind: 'platform' }, CONFIG))
+  assert.equal(outcome.kind, 'error')
+  assert.match(outcome.text, /没有返回可用片段/u)
+  assert.deepEqual(tools.calls, [])
+})
+
+test('内容中台来源：检索接口错误保留后端错误码和请求 ID，方便定位', async () => {
+  const ctx = { llm: judge([]), tools: toolRecorder({}) }
+  const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd: os.tmpdir() } } }
+  const routes = platformRoutes({
+    bases: [{ id: 'kb', name: '联调资料库' }],
+    knowledge: [{ id: 'k1', title: '产品资料.md', file_type: 'md', parse_status: 'completed' }],
+    hybridFailure: () => new Response(JSON.stringify({ success: false,
+      error: { code: 1002, message: '权限不足' } }), {
+      status: 403, headers: { 'Content-Type': 'application/json', 'X-Request-ID': 'req-test-403' },
+    }),
+  })
+  const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal, { kind: 'platform' }, CONFIG))
+  assert.equal(outcome.kind, 'error')
+  assert.match(outcome.text, /HTTP 403 \(1002\)：权限不足/u)
+  assert.match(outcome.text, /req-test-403/u)
+})
+
 test('只说 CallWan 售前方案：自动读取匹配知识库并直接生成营销大纲', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-auto-kb-'))
   let generated
   const tools = toolRecorder({
-    wlyd_ingest: input => ({ isError: false, value: { label: input.arguments.label,
-      counts: { extracted: 1 }, files: [{ path: `${input.arguments.path}/k1-产品介绍.md`, excerpt: sourceText }] } }),
     wlyd_solution: input => { generated = input.arguments; return { isError: false, value: {
       markdownPath: 'solution.md', docxPath: 'solution.docx', editUrl: 'http://localhost/solution.html',
     } } },
@@ -203,7 +275,7 @@ test('只说 CallWan 售前方案：自动读取匹配知识库并直接生成�
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
     { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
   assert.equal(outcome.kind, 'success', outcome.text)
-  assert.deepEqual(tools.calls, ['wlyd_ingest', 'wlyd_solution'])
+  assert.deepEqual(tools.calls, ['wlyd_solution'])
   assert.match(outcome.text, /内容中台/)
   assert.ok(generated.sections.some(section => /挑战|问题/u.test(section.heading)))
   assert.ok(generated.sections.every(section => !/接口|Swagger|API/iu.test(section.heading)))
@@ -237,8 +309,6 @@ test('匹配知识库暂不可读时自动查公开资料并直接生成待核�
 test('知识库已读到材料但组稿失败时保留原错误，不改用单条公开摘要', async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'wlyd-auto-model-error-'))
   const tools = toolRecorder({
-    wlyd_ingest: input => ({ isError: false, value: { label: 'CallWan', counts: { extracted: 6 },
-      files: [{ path: `${input.arguments.path}/k1-产品介绍.md`, excerpt: sourceText }] } }),
   })
   const ctx = { tools, fs: fsShim(), llm: { async *stream() {
     yield { type: 'finish', reason: { kind: 'error', failure: { code: 'MODEL_FAILED' } } }
@@ -251,7 +321,7 @@ test('知识库已读到材料但组稿失败时保留原错误，不改用单�
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
     { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
   assert.equal(outcome.kind, 'error')
-  assert.match(outcome.text, /已读取 6 篇资料/u)
+  assert.match(outcome.text, /已读取 1 篇资料/u)
   assert.match(outcome.text, /模型调用失败/u)
-  assert.deepEqual(tools.calls, ['wlyd_ingest'])
+  assert.deepEqual(tools.calls, [])
 })
