@@ -5,6 +5,7 @@
  * @module @wlyd/dsh-presales-solution/html
  */
 
+import { customerFacingSolution } from './customer-copy.js'
 import { readFileSync } from 'node:fs'
 import { painBasisLabel } from './pain-basis.js'
 import { iconForText, semanticIcon } from './visual-language.js'
@@ -60,6 +61,14 @@ function esc(text) {
     .replaceAll('"', '&quot;')
 }
 
+/** 标记只作用于编辑预览；文本及来源仍经 esc 转义。 */
+function reviewText(value, path, source) {
+  const item = source.copyReview?.find(item => item.path === path && item.status === 'pending')
+  const text = esc(value ?? '')
+  if (!source.editorId || !item) return text
+  return `<span class="copy-review${text ? '' : ' copy-review-empty'}" role="button" tabindex="0" data-edit-path="${esc(path)}" aria-label="编辑并校对此处内容" title="点击编辑并校对">${text || '点击补充内容'}</span>`
+}
+
 // ── 内容分页:按粗略高度权重把块切到多页 ──────────────────────────
 
 /** 按文字量估算版心占用；超长内容先拆块，再分页。 */
@@ -100,7 +109,7 @@ function splitBlock(block) {
   }
   if (block.type === 'bullets' || block.type === 'steps') {
     const entries = block.items.flatMap((item, index) => splitText(item, block.type === 'steps' ? 95 : 180)
-      .map((text, part) => ({ text, number: index + 1, continued: part > 0 })))
+      .map((text, part) => ({ text, number: index + 1, sourceIndex: index, continued: part > 0 })))
     const size = block.type === 'steps' && entries.length <= 5
       && entries.every(item => item.text.length <= 78) ? 5 : 4
     const groups = Math.ceil(entries.length / size)
@@ -108,17 +117,17 @@ function splitBlock(block) {
     const parts = []
     for (let i = 0; i < entries.length; i += pageSize) {
       const group = entries.slice(i, i + pageSize)
-      parts.push({ ...block, items: group.map(item => item.continued ? `${item.text}（续）` : item.text), numbers: group.map(item => item.number),
+      parts.push({ ...block, items: group.map(item => item.continued ? `${item.text}（续）` : item.text), numbers: group.map(item => item.number), itemIndices: group.map(item => item.sourceIndex),
         ...(block.type === 'steps' ? { flowPaged: groups > 1, flowContinued: i > 0 } : {}) })
     }
     return parts
   }
   if (block.type === 'table') {
     const rows = []
-    for (const row of block.rows) {
+    for (const [rowIndex, row] of block.rows.entries()) {
       const pieces = row.map(cell => splitText(cell, 150))
       const count = Math.max(...pieces.map(part => part.length))
-      for (let i = 0; i < count; i++) rows.push(pieces.map(part => part[i] ?? ''))
+      for (let i = 0; i < count; i++) { const row = pieces.map(part => part[i] ?? ''); row.sourceIndex = rowIndex; rows.push(row) }
     }
     const pages = []
     let page = []
@@ -126,11 +135,11 @@ function splitBlock(block) {
     for (const row of rows) {
       const weight = Math.max(1.2, row.join('').length / 80)
       if (page.length && (page.length >= (block.headers.length >= 3 ? 3 : 6) || used + weight > 7.5)) {
-        pages.push({ ...block, rows: page }); page = []; used = 2
+        pages.push({ ...block, rows: page, rowIndices: page.map(row => row.sourceIndex) }); page = []; used = 2
       }
       page.push(row); used += weight
     }
-    if (page.length) pages.push({ ...block, rows: page })
+    if (page.length) pages.push({ ...block, rows: page, rowIndices: page.map(row => row.sourceIndex) })
     return pages
   }
   return [block]
@@ -178,43 +187,43 @@ function paginateBlocks(blocks) {
 function renderBlock(block, assetByName, features, sectionKind = '') {
   switch (block.type) {
     case 'para':
-      return `<p class="para${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${esc(block.text)}</p>`
+      return `<p class="para${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${reviewText(block.text, `blocks/${block.id}/text`, features.source)}</p>`
     case 'bullets':
       if (['capabilities', 'scenarios'].includes(sectionKind) && block.items.length >= 3
         && block.items.length <= 4 && block.items.every(item => String(item).length <= 90)) {
-        return `<div class="capability-map" role="group" aria-label="能力关系图"><div class="map-hub">${semanticIcon(sectionKind)}<strong>能力组合</strong></div><div class="map-nodes">${block.items.map(item => `<div class="map-node">${semanticIcon(iconForText(item))}<span>${esc(item)}</span></div>`).join('')}</div></div>`
+        return `<div class="capability-map" role="group" aria-label="能力关系图"><div class="map-hub">${semanticIcon(sectionKind)}<strong>能力组合</strong></div><div class="map-nodes">${block.items.map((item, i) => `<div class="map-node">${semanticIcon(iconForText(item))}<span>${reviewText(item, `blocks/${block.id}/items/${block.itemIndices?.[i] ?? i}`, features.source)}</span></div>`).join('')}</div></div>`
       }
-      return `<div class="card"><ul class="bullets">${block.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`
+      return `<div class="card"><ul class="bullets">${block.items.map((item, i) => `<li>${reviewText(item, `blocks/${block.id}/items/${block.itemIndices?.[i] ?? i}`, features.source)}</li>`).join('')}</ul></div>`
     case 'quote':
       if (block.text.startsWith('来源：') && block.text.includes('\n')) {
         const [source, ...excerpt] = block.text.slice(3).split('\n')
         const label = source.split(/[\\/]/u).at(-1).replace(/^[a-f0-9]{8}-[a-f0-9-]{27,}-/iu, '')
         return `<aside class="source-note" title="${esc(source)}"><strong>资料依据 · ${esc(label)}</strong><p>${esc(excerpt.join('\n'))}</p></aside>`
       }
-      return `<blockquote class="editorial-quote${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${esc(block.text)}</blockquote>`
+      return `<blockquote class="editorial-quote${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${reviewText(block.text, `blocks/${block.id}/text`, features.source)}</blockquote>`
     case 'steps':
       return `<div class="flow" style="--step-count:${Math.min(block.items.length, 5)};grid-template-columns:repeat(${Math.min(block.items.length, 5)},1fr)">`
-        + block.items.map((item, i) => `<div class="step"><i>${String(block.numbers?.[i] ?? i + 1).padStart(2, '0')}</i>${semanticIcon(iconForText(item, 'implementation'), 'step-icon')}<span>${esc(item)}</span></div>`).join('')
+        + block.items.map((item, i) => `<div class="step"><i>${String(block.numbers?.[i] ?? i + 1).padStart(2, '0')}</i>${semanticIcon(iconForText(item, 'implementation'), 'step-icon')}<span>${reviewText(item, `blocks/${block.id}/items/${block.itemIndices?.[i] ?? i}`, features.source)}</span></div>`).join('')
         + '</div>'
     case 'table': {
       const evidenceColumns = block.headers.map(header => /来源|依据|出处/u.test(header))
       return '<table class="table"><thead><tr>'
-        + block.headers.map((h, index) => `<th${evidenceColumns[index] ? ' class="source-evidence"' : ''}>${esc(h)}</th>`).join('')
+        + block.headers.map((h, index) => `<th${evidenceColumns[index] ? ' class="source-evidence"' : ''}>${evidenceColumns[index] ? esc(h) : reviewText(h, `blocks/${block.id}/headers/${index}`, features.source)}</th>`).join('')
         + '</tr></thead><tbody>'
-        + block.rows.map(r => `<tr>${r.map((c, index) => `<td${evidenceColumns[index] ? ' class="source-evidence"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')
+        + block.rows.map((r, row) => `<tr>${r.map((c, index) => `<td${evidenceColumns[index] ? ' class="source-evidence"' : ''}>${evidenceColumns[index] ? esc(c) : reviewText(c, `blocks/${block.id}/rows/${block.rowIndices?.[row] ?? row}/${index}`, features.source)}</td>`).join('')}</tr>`).join('')
         + '</tbody></table>'
     }
     case 'metrics':
       return `<div class="metrics" style="grid-template-columns:repeat(${Math.min(block.items.length, 4)},1fr)">`
-        + block.items.map(m => `<div class="metric"><strong>${esc(m.value)}</strong><span>${esc(m.label)}</span></div>`).join('')
+        + block.items.map((m, i) => `<div class="metric"><strong>${reviewText(m.value, `blocks/${block.id}/metrics/${i}/value`, features.source)}</strong><span>${reviewText(m.label, `blocks/${block.id}/metrics/${i}/label`, features.source)}</span></div>`).join('')
         + '</div>'
-    case 'chart': return renderChart(block)
+    case 'chart': return renderChart(block, features)
     case 'image': {
       const asset = assetByName.get(block.sourcePath ?? block.path)
       if (!asset) return ''
       features.hasImage = true
       return `<figure class="visual"><div class="frame"><img src="./${esc(asset.fileName)}" alt="${esc(block.caption ?? '')}"></div>`
-        + (block.caption ? `<em>${esc(block.caption)}</em>` : '')
+        + (block.caption ? `<em>${reviewText(block.caption, `blocks/${block.id}/caption`, features.source)}</em>` : '')
         + '</figure>'
     }
     default:
@@ -222,25 +231,25 @@ function renderBlock(block, assetByName, features, sectionKind = '') {
   }
 }
 
-function renderChart(block) {
+function renderChart(block, features) {
   const max = Math.max(1, ...block.points.map(point => point.value))
   const pending = block.evidenceStatus === 'user_unverified'
   const source = block.external ? '' : `<p class="chart-source source-evidence">${pending ? '数据已修改，待核对原始依据' : '数据依据'}：${esc(block.source.path)} · ${esc(block.source.quote)}</p>`
   const body = block.chartType === 'bar'
-    ? `<div class="chart-bars">${block.points.map(point => `<div class="chart-row"><span class="chart-label">${esc(point.label)}</span><div class="chart-track"><span style="width:${Math.max(0, point.value / max * 100).toFixed(2)}%"></span></div><strong>${esc(point.value)} ${esc(block.unit)}</strong></div>`).join('')}</div>`
+    ? `<div class="chart-bars">${block.points.map((point, index) => `<div class="chart-row"><span class="chart-label">${reviewText(point.label, `blocks/${block.id}/chart/${index}/label`, features.source)}</span><div class="chart-track"><span style="width:${Math.max(0, point.value / max * 100).toFixed(2)}%"></span></div><strong>${reviewText(point.value, `blocks/${block.id}/chart/${index}/value`, features.source)} ${esc(block.unit)}</strong></div>`).join('')}</div>`
     : (() => {
       const coords = block.points.map((point, index) => ({ x: 58 + index * 884 / (block.points.length - 1), y: 30 + (1 - point.value / max) * 225 }))
       const line = coords.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ')
-      return `<div class="chart-line"><svg viewBox="0 0 1000 290" role="img" aria-label="${esc(block.title)}，单位 ${esc(block.unit)}"><line x1="58" y1="255" x2="942" y2="255" class="chart-base"/><polyline points="${line}" class="chart-path"/>${coords.map((point, index) => `<circle cx="${point.x}" cy="${point.y}" r="7" class="chart-dot"><title>${esc(block.points[index].label)}：${esc(block.points[index].value)} ${esc(block.unit)}</title></circle>`).join('')}</svg><div class="chart-axis" style="grid-template-columns:repeat(${block.points.length},1fr)">${block.points.map(point => `<div><span>${esc(point.label)}</span><strong>${esc(point.value)}</strong></div>`).join('')}</div></div>`
+      return `<div class="chart-line"><svg viewBox="0 0 1000 290" role="img" aria-label="${esc(block.title)}，单位 ${esc(block.unit)}"><line x1="58" y1="255" x2="942" y2="255" class="chart-base"/><polyline points="${line}" class="chart-path"/>${coords.map((point, index) => `<circle cx="${point.x}" cy="${point.y}" r="7" class="chart-dot"><title>${esc(block.points[index].label)}：${esc(block.points[index].value)} ${esc(block.unit)}</title></circle>`).join('')}</svg><div class="chart-axis" style="grid-template-columns:repeat(${block.points.length},1fr)">${block.points.map((point, index) => `<div><span>${reviewText(point.label, `blocks/${block.id}/chart/${index}/label`, features.source)}</span><strong>${reviewText(point.value, `blocks/${block.id}/chart/${index}/value`, features.source)}</strong></div>`).join('')}</div></div>`
     })()
-  return `<figure class="data-chart ${block.chartType === 'line' ? 'trend-chart' : 'comparison-chart'}"><figcaption><h3>${esc(block.title)}</h3><span>${esc(block.unit)}${pending ? ' · 待确认' : ''}</span></figcaption>${body}${source}</figure>`
+  return `<figure class="data-chart ${block.chartType === 'line' ? 'trend-chart' : 'comparison-chart'}"><figcaption><h3>${reviewText(block.title, `blocks/${block.id}/chart/title`, features.source)}</h3><span>${reviewText(block.unit, `blocks/${block.id}/chart/unit`, features.source)}</span></figcaption>${body}${source}</figure>`
 }
 
 function renderCard(block, assetByName, features, sectionKind) {
   if (block.type === 'quote') {
     return renderBlock(block, assetByName, features, sectionKind)
   }
-  return `<div class="card">${['capabilities', 'scenarios'].includes(sectionKind) ? semanticIcon(iconForText(block.items.join(' ')), 'card-icon') : ''}<ul class="bullets">${block.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`
+  return `<div class="card">${['capabilities', 'scenarios'].includes(sectionKind) ? semanticIcon(iconForText(block.items.join(' ')), 'card-icon') : ''}<ul class="bullets">${block.items.map((item, i) => `<li>${reviewText(item, `blocks/${block.id}/items/${block.itemIndices?.[i] ?? i}`, features.source)}</li>`).join('')}</ul></div>`
 }
 
 // ── 页面渲染 ──────────────────────────────────────────────────────
@@ -254,8 +263,8 @@ function coverSlide(solution, t) {
   return `<section class="slide cover${offset ? ' cover-offset' : ''}">
   <div class="cover-top"><span>${esc(meta.company ?? '')}</span><span>${esc(meta.date ?? '')}</span></div>
   <div class="cover-grid"><div class="cover-main">
-    <h1 style="font-size:${titleSize}px">${esc(solution.title)}</h1>
-    ${solution.subtitle ? `<p class="sub">${esc(solution.subtitle)}</p>` : ''}
+    <h1 style="font-size:${titleSize}px">${reviewText(solution.title, 'title', solution)}</h1>
+    ${solution.subtitle ? `<p class="sub">${reviewText(solution.subtitle, 'subtitle', solution)}</p>` : ''}
   </div><div class="cover-geometry" aria-hidden="true"><span></span><span></span><span></span></div></div>
   <div class="cover-bottom"><span>${esc(meta.product ?? '')}</span><span>${esc([meta.version, meta.contact].filter(Boolean).join(' · '))}</span></div>
 </section>`
@@ -276,8 +285,8 @@ function dividerSlide(solution, section, no, t) {
   return `<section class="slide divider${no % 2 === 0 ? ' divider-light' : ''}">
   <div class="inner">
     <p class="chap">${String(no).padStart(2, '0')}</p>
-    <h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>
-    ${section.lead ? `<p>${esc(section.lead)}</p>` : ''}
+    <h2 style="font-size:${headingSize}px">${reviewText(section.heading, `sections/${section.id}/heading`, solution)}</h2>
+    ${section.lead ? `<p>${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}
   </div>
   <div class="divider-symbol">${semanticIcon(section.kind)}</div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
@@ -380,7 +389,7 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   const continuation = blocks.some(block => block.type === 'steps' && block.flowContinued) ? '（续）' : ''
   return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading + continuation)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
+  <div class="head"><h2 style="font-size:${headingSize}px">${reviewText(section.heading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
   <div class="body"${gap}>
 ${body}
   </div>
@@ -411,11 +420,11 @@ function linkedSlide(solution, section, links, solutionPage, index = 0) {
   const tag = solution.meta.product ?? solution.title
   const headingSize = section.heading.length > 60 ? 28 : section.heading.length > 30 ? 34 : 40
   const cards = links.map(link => solutionPage
-    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${esc(link.solution)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p>`}</div></article>`
-    : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${esc(link.pain)}</h3>${solution.external ? '' : `<p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</article>`).join('\n')
+    ? `<article class="pair-map"><div class="pair-problem"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}${link.continued ? '（续）' : ''}</span><h3>${reviewText(link.pain, `links/${link.id}/pain`, solution)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</div><span class="pair-arrow" aria-hidden="true"></span><div class="pair-answer"><span class="pair-id">${esc(link.id)} · 对应方案${link.continued ? '（续）' : ''}</span><h3>${reviewText(link.solution, `links/${link.id}/solution`, solution)}</h3>${solution.external ? '' : `<p class="source-evidence">依据：${esc(link.solutionEvidence.path)} · ${esc(link.solutionEvidence.quote)}</p>`}</div></article>`
+    : `<article class="pain-card"><span class="pair-id">${esc(link.id)} · ${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户痛点')}${link.continued ? '（续）' : ''}</span><h3>${reviewText(link.pain, `links/${link.id}/pain`, solution)}</h3>${solution.external ? '' : `<p class="source-evidence">材料依据：${esc(link.painEvidence.path)} · ${esc(link.painEvidence.quote)}</p>`}</article>`).join('\n')
   return `<section class="slide linked-slide ${solutionPage ? 'solution-links' : 'pain-links'}${index % 2 ? ' pair-stacked' : ''}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2></div>
+  <div class="head"><h2 style="font-size:${headingSize}px">${reviewText(section.heading, `sections/${section.id}/heading`, solution)}</h2></div>
   <div class="linked-body">${cards}</div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
 </section>`
@@ -427,10 +436,10 @@ function relationSlide(solution, section, links, index) {
   const flip = solution.visualDesign?.direction === 'night' || solution.visualDesign?.direction === 'signal' ? 1 : 0
   return `<section class="slide relation-slide ${(index + flip) % 2 ? 'relation-alternate' : ''}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2>${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
+  <div class="head"><h2>${reviewText(section.heading, `sections/${section.id}/heading`, solution)}</h2>${section.lead ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
   <div class="relation-board" role="group" aria-label="客户挑战与对应做法">
     <div class="relation-head"><span>客户挑战</span><span>对应做法</span></div>
-    ${links.map(link => `<div class="relation-row"><span class="relation-no">${esc(link.id)}</span><div class="relation-problem"><small>${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}</small><strong>${esc(link.pain)}</strong></div><div class="relation-connector" aria-hidden="true"><span></span></div><div class="relation-answer"><small>对应做法</small><strong>${esc(link.solution)}</strong></div></div>`).join('')}
+    ${links.map(link => `<div class="relation-row"><span class="relation-no">${esc(link.id)}</span><div class="relation-problem"><small>${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}</small><strong>${reviewText(link.pain, `links/${link.id}/pain`, solution)}</strong></div><div class="relation-connector" aria-hidden="true"><span></span></div><div class="relation-answer"><small>对应做法</small><strong>${reviewText(link.solution, `links/${link.id}/solution`, solution)}</strong></div></div>`).join('')}
   </div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
 </section>`
@@ -452,12 +461,14 @@ function closingSlide(solution, t) {
  * @returns {string} 完整 HTML 文档。
  */
 export function renderHtml(solution, assets, options = {}) {
+  solution = customerFacingSolution(solution)
   const preview = options.externalPreview
+  if (preview) solution = { ...solution, editorId: preview.editorId, copyReview: options.copyReview ?? [] }
   const t = THEMES[solution.theme] ?? THEMES.corporate
   const designDirection = ['redline', 'paper', 'night', 'signal'].includes(solution.visualDesign?.direction)
     ? solution.visualDesign.direction : ''
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
-  const features = { hasImage: false }
+  const features = { hasImage: false, source: solution }
 
   const slides = [coverSlide(solution, t)]
   for (let i = 0; i < solution.sections.length; i += 6) {
@@ -514,7 +525,7 @@ export function renderHtml(solution, assets, options = {}) {
 ${cssFor(t, features)}
 </style>
 </head>
-<body${designDirection ? ` class="design-${designDirection}"` : ''}${solution.editorId ? ` data-editor-id="${esc(solution.editorId)}"` : ''}${preview ? ` data-editor-id="${esc(preview.editorId)}" data-revision="${esc(preview.revision)}"` : ''}>
+<body${designDirection ? ` class="design-${designDirection}"` : ''}${solution.editorId && !preview ? ` data-editor-id="${esc(solution.editorId)}"` : ''}${preview ? ` data-editor-id="${esc(preview.editorId)}" data-revision="${esc(preview.revision)}"` : ''}>
 <main class="deck">
 ${slides.join('\n')}
 </main>
@@ -981,6 +992,14 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .design-signal .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
 .design-signal .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--blue)}
 .design-signal .layout-editorial-band .body>.card{border-left-color:var(--blue)}
+.copy-review{cursor:pointer;text-decoration-line:underline;text-decoration-style:dotted;text-decoration-thickness:1.5px;text-underline-offset:.22em;text-decoration-color:currentColor}
+.copy-review:hover{ text-decoration-style:solid }
+.copy-review:focus-visible{outline:2px solid currentColor;outline-offset:4px}
+.copy-review-empty{font-size:16px;font-weight:400}
+.editor-review{display:flex;align-items:start;gap:8px;margin-top:8px;font-size:12px;line-height:1.5;color:var(--ink2)}
+.editor-review input{width:auto;margin-top:3px;accent-color:var(--blue)}
+.editor-field.review-target{outline:2px solid var(--blue);outline-offset:6px}
+@media print{.copy-review{text-decoration:none}.copy-review-empty{display:none}}
 .review-highlight{outline:3px solid var(--red);outline-offset:5px}
 ::selection{background:var(--blue);color:#fff}
 @media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`

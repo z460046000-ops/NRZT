@@ -3,6 +3,7 @@
  * @module @wlyd/dsh-solution-kit/docx
  */
 
+import { customerFacingSolution } from './customer-copy.js'
 import {
   AlignmentType, Document, HeadingLevel, ImageRun, Packer,
   Paragraph, Table, TableCell, TableRow, TextRun, WidthType,
@@ -21,6 +22,7 @@ const MAX_IMG_HEIGHT = 620
  * @returns {Promise<Buffer>} docx 文件字节。
  */
 export async function renderDocx(solution, assets) {
+  solution = customerFacingSolution(solution)
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
   const children = []
 

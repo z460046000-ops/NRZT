@@ -55,6 +55,15 @@
             locate.type = 'button'; locate.textContent = '定位文字'
             locate.addEventListener('click', () => {
               const slides = [...document.querySelectorAll('.slide')]
+              const marked = [...document.querySelectorAll('[data-edit-path]')].find(item => item.dataset.editPath === issue.location.field)
+              if (marked) {
+                const slide = marked.closest('.slide')
+                fields.hidden = true
+                document.getElementById('release-open').textContent = '外发检查'
+                window.dispatchEvent(new CustomEvent('presales:go-to-slide', { detail: slides.indexOf(slide) + 1 }))
+                marked.click()
+                return
+              }
               const scopeText = slide => {
                 if (issue.location.field.startsWith('links/')) return slide.querySelector('.linked-body,.relation-board')?.textContent ?? ''
                 if (issue.location.field.includes('/blocks/')) return slide.querySelector('.body')?.textContent ?? ''

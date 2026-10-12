@@ -490,13 +490,14 @@ async function preparePlatformFiles(ctx, exec, filesIn = [], tool, attachmentRef
 export function apply(ctx, config) {
   // 同包提供原创售前幻灯片设计 Skill；确定性渲染仍由 renderHtml 执行。
   ctx.inject(['skills'], skillCtx => {
-    const raw = readFileSync(new URL('../skills/wlyd-presales-html-ppt/SKILL.md', import.meta.url), 'utf8')
-    const content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '')
-    skillCtx.skills.register({
-      name: 'wlyd-presales-html-ppt',
-      description: '设计或复核万联智达售前解决方案的 HTML 幻灯片时使用；保持事实来源、痛点与做法对应，以及可编辑源稿同步。',
-      source: 'runtime', content,
-    })
+    for (const [name, description] of [
+      ['wlyd-presales-copywriting', '撰写或润色售前方案；按事实、客户视角、短句及去 AI 套话标准表达，校对状态独立保存。'],
+      ['wlyd-presales-html-ppt', '设计或复核售前 HTML 幻灯片；按内容选择整稿统一风格，保持层级、分页和图表可读。'],
+    ]) {
+      const raw = readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url), 'utf8')
+      const content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '')
+      skillCtx.skills.register({ name, description, source: 'runtime', content })
+    }
   })
   const awaitingMaterial = new WeakSet()
   const pendingDecision = new WeakMap()

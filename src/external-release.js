@@ -96,6 +96,15 @@ function checkRelease(source, draft, policy, confirmation) {
       problems.push(issue('claim_upgrade', `声明不能从“${weaker}”升级为“${stronger}”`))
     }
   }
+  for (const item of source.copyReview ?? []) {
+    if (item.status !== 'pending') continue
+    const sectionIndex = source.sections.findIndex(section => item.path.includes(`/${section.id}/`) || section.blocks.some(block => item.path.includes(`/${block.id}/`)) ||
+      (item.path.startsWith('links/') && ['problem_solution', 'pains', 'solution'].includes(section.kind)))
+    problems.push(issue('copy_review', item.placeholder ? '此处尚无实质内容，请补充或确认本次外发范围' : '此处内容尚待校对', {
+      field: item.path, sectionIndex, sectionHeading: source.sections[sectionIndex]?.heading ?? '封面',
+      excerpt: item.value?.slice(0, 120) || '尚无实质内容', term: '',
+    }, true))
+  }
   if ((source.painSolutionLinks ?? []).some(link => ['public_unverified', 'user_unverified'].includes(link.painBasis))) {
     problems.push(issue('unverified_basis', '公开资料或用户补充的痛点仍待核实，不能标记为可外发'))
   }
@@ -122,7 +131,7 @@ export async function externalPreview(id) {
   const names = assetMap(solution, false)
   return { html: renderHtml(externalizeSolution(solution, names),
     (solution.assets ?? []).map(asset => ({ ...asset, fileName: names.get(asset.sourcePath) })),
-    { externalPreview: { editorId: id, revision: solution.revision, policyVersion: `${policy.version} · ${digest.slice(0, 8)}` } }),
+    { externalPreview: { editorId: id, revision: solution.revision, policyVersion: `${policy.version} · ${digest.slice(0, 8)}` }, copyReview: solution.copyReview }),
   }
 }
 

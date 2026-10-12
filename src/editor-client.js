@@ -19,6 +19,7 @@
   let dirty = false
   const originals = new Map()
   const replacements = new Map()
+  const reviewed = new Set()
 
   function message(value, kind = '') {
     status.textContent = value
@@ -32,15 +33,20 @@
   }
 
   function field(parent, label, path, value, multiline = false) {
-    const wrap = document.createElement('label')
+    const wrap = document.createElement('div')
     wrap.className = 'editor-field'
-    const title = document.createElement('span')
+    const title = document.createElement('label')
     title.textContent = label
     const input = document.createElement(multiline ? 'textarea' : 'input')
     if (!multiline) input.type = 'text'
+    input.id = `copy-field-${originals.size}`
+    title.htmlFor = input.id
     input.value = value ?? ''
     input.dataset.path = path
+    let reviewCheck
     input.addEventListener('input', () => {
+      reviewed.delete(path)
+      if (reviewCheck) { reviewCheck.checked = false; reviewCheck.disabled = !input.value.trim() }
       if (path.startsWith('links/') || (path.startsWith('blocks/') && !path.endsWith('/caption'))) {
         fact.checked = true; knowledgeFields.hidden = false
       }
@@ -48,6 +54,26 @@
     })
     originals.set(path, input.value)
     wrap.append(title, input)
+    const item = source?.copyReview?.find(item => item.path === path && item.status === 'pending')
+    if (item) {
+      const label = document.createElement('label')
+      label.className = 'editor-review'
+      reviewCheck = document.createElement('input')
+      reviewCheck.type = 'checkbox'
+      reviewCheck.disabled = !input.value.trim()
+      reviewCheck.dataset.reviewPath = path
+      reviewCheck.addEventListener('change', () => {
+        if (reviewCheck.checked) reviewed.add(path)
+        else reviewed.delete(path)
+        markDirty()
+      })
+      const help = document.createElement('span')
+      help.textContent = `${item.reason}。核对后勾选“此处已校对”，保存后取消下划线。`
+      const text = document.createElement('span')
+      text.textContent = '此处已校对'
+      label.append(reviewCheck, text)
+      wrap.append(help, label)
+    }
     parent.append(wrap)
     return input
   }
@@ -153,12 +179,12 @@
     })
   }
 
-  async function open() {
+  async function open(fieldPath) {
     panel.hidden = false
     document.body.classList.add('editor-open')
     document.getElementById('editor-close').focus()
     window.dispatchEvent(new Event('resize'))
-    if (source) return
+    if (source) { focusField(fieldPath); return }
     message('正在读取方案…')
     try {
       if (location.protocol === 'file:') throw new Error('离线文件无法连接 DSH 保存服务。请在 DSH 对话中打开编辑链接。')
@@ -167,8 +193,24 @@
       if (!response.ok) throw new Error(data.error || '读取失败')
       source = data.solution
       renderForm(source)
+      focusField(fieldPath)
       message(`第 ${source.revision} 版 · 修改后保存将同步 JSON、Markdown 和 DOCX`)
     } catch (error) { message(error.message, 'error') }
+  }
+
+  function focusField(path) {
+    if (typeof path !== 'string') return
+    const input = [...fields.querySelectorAll('[data-path]')].find(input => input.dataset.path === path)
+    if (!input) { message('该内容未找到编辑项，请刷新后重试', 'error'); return }
+    for (const marked of fields.querySelectorAll('.review-target')) marked.classList.remove('review-target')
+    let parent = input.parentElement
+    while (parent && parent !== fields) {
+      if (parent.tagName === 'DETAILS') parent.open = true
+      parent = parent.parentElement
+    }
+    input.closest('.editor-field').classList.add('review-target')
+    input.scrollIntoView({ block: 'center' })
+    input.focus()
   }
 
   function hide() {
@@ -184,7 +226,7 @@
     const changes = [...fields.querySelectorAll('[data-path]')]
       .filter(input => input.value !== originals.get(input.dataset.path))
       .map(input => ({ path: input.dataset.path, value: input.value }))
-    if (!changes.length && !replacements.size) { message('没有需要保存的修改'); return }
+    if (!changes.length && !replacements.size && !reviewed.size) { message('没有需要保存的修改'); return }
     if (fact.checked && !note.value.trim()) {
       noteError.hidden = false
       message('请填写事实修改原因', 'error')
@@ -197,7 +239,7 @@
     try {
       const response = await fetch('/api/wlyd-presales/save', {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, baseRevision: source.revision, changes,
+        body: JSON.stringify({ id, baseRevision: source.revision, changes, reviewedPaths: [...reviewed],
           replacements: [...replacements.values()],
           knowledge: { factChange: fact.checked, scope: scope.value, targetId: target.value, reason: note.value } }),
       })
@@ -210,7 +252,15 @@
     } catch (error) { save.disabled = false; message(error.message, 'error') }
   }
 
-  toggle.addEventListener('click', open)
+  toggle.addEventListener('click', () => open())
+  document.addEventListener('click', event => {
+    const target = event.target.closest?.('[data-edit-path]')
+    if (target) open(target.dataset.editPath)
+  })
+  document.addEventListener('keydown', event => {
+    const target = event.target.closest?.('[data-edit-path]')
+    if (target && ['Enter', ' '].includes(event.key)) { event.preventDefault(); open(target.dataset.editPath) }
+  })
   fact.addEventListener('change', () => { knowledgeFields.hidden = !fact.checked; noteError.hidden = true })
   note.addEventListener('input', () => { noteError.hidden = true })
   close.addEventListener('click', hide)

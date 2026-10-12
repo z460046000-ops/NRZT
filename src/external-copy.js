@@ -1,5 +1,5 @@
 /** 从可追溯的内部源稿派生只含展示字段的外部稿；不改原稿。 */
-import { customerCopy } from './customer-copy.js'
+import { customerFacingSolution, customerCopy } from './customer-copy.js'
 
 const sourceColumn = value => /来源|依据|出处|证据/u.test(value)
 const sourceQuote = value => /^\s*(?:来源|材料依据)[:：]/u.test(value)
@@ -14,7 +14,7 @@ function displayText(value) {
 function displayBlock(block, assetNames) {
   if (block.type === 'para' || block.type === 'quote') {
     if (sourceQuote(block.text)) return null
-    return { type: block.type, text: displayText(block.text) }
+    return block.text?.trim() ? { id: block.id, type: block.type, text: displayText(block.text) } : null
   }
   if (block.type === 'bullets' || block.type === 'steps') {
     return { type: block.type, items: block.items.map(displayText) }
@@ -43,6 +43,7 @@ function displayBlock(block, assetNames) {
 
 /** assetNames: Map<内部素材路径, 预览或外发素材路径>。 */
 export function externalizeSolution(source, assetNames = new Map()) {
+  source = customerFacingSolution(source)
   return {
     external: true,
     title: displayText(source.title), subtitle: displayText(source.subtitle ?? ''), theme: source.theme,
@@ -52,8 +53,11 @@ export function externalizeSolution(source, assetNames = new Map()) {
       version: displayText(source.meta?.version ?? ''), date: source.meta?.date ?? '',
     },
     sections: source.sections.map(section => ({
-      kind: section.kind, heading: displayText(section.heading), lead: displayText(section.lead ?? ''),
-      blocks: section.blocks.map(block => displayBlock(block, assetNames)).filter(Boolean),
+      kind: section.kind, id: section.id, heading: displayText(section.heading), lead: displayText(section.lead ?? ''),
+      blocks: section.blocks.map(block => {
+        const visible = displayBlock(block, assetNames)
+        return visible ? { ...visible, id: block.id } : null
+      }).filter(Boolean),
     })),
     painSolutionLinks: (source.painSolutionLinks ?? []).map(link => ({
       id: link.id,

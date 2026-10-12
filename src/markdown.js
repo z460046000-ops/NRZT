@@ -2,6 +2,7 @@
  * 售前解决方案的 Markdown 渲染:与 HTML/DOCX 同源的单一结构化数据。
  * @module @wlyd/dsh-presales-solution/markdown
  */
+import { customerFacingSolution } from './customer-copy.js'
 import { painWithBasis } from './pain-basis.js'
 
 /**
@@ -11,6 +12,7 @@ import { painWithBasis } from './pain-basis.js'
  * @returns {string} Markdown 文本。
  */
 export function renderMarkdown(solution, assets) {
+  solution = customerFacingSolution(solution)
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
   const lines = []
   lines.push(`# ${solution.title}`, '')

@@ -40,7 +40,7 @@ test('内部稿保留证据，外发稿去除来源且规则可改可回退', as
           { type: 'quote', text: '来源：materials/secret.md\n集中管理' },
         ] },
         { kind: 'boundary', heading: '适用范围', lead: '', blocks: [
-          { type: 'para', text: '待与贵方确认：我们将结合贵方业务场景，进一步确认方案的适用范围与实施方式。' },
+          { type: 'para', text: '实施范围将结合贵方业务场景在项目启动阶段确认。' },
           { type: 'image', path: 'solution-assets/sample.png', sourcePath: 'solution-assets/sample.png', caption: '产品界面示意' },
         ] },
       ],
@@ -124,7 +124,7 @@ test('未解决状态、密钥和未经核实的问题阻止外发', async () =>
     const checked = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation })
     assert.ok(checked.issues.some(item => item.id === 'unverified_basis'))
     assert.ok(checked.issues.some(item => item.id === 'secret'))
-    assert.ok(checked.issues.some(item => item.id === 'internal_term' && item.reviewable && item.location))
+    assert.ok(checked.issues.some(item => item.id === 'copy_review' && item.reviewable && item.location))
     const acknowledged = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation,
       acknowledgedIssues: { keys: checked.issues.filter(item => item.reviewable).map(item => item.key), policyDigest: checked.policyDigest } })
     assert.ok(acknowledged.issues.some(item => item.id === 'secret'))

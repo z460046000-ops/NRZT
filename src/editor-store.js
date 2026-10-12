@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { customerFacingSolution } from './customer-copy.js'
 import { renderMarkdown } from './markdown.js'
 import { renderHtml } from './html.js'
 import { renderDocx } from './docx.js'
@@ -28,7 +29,7 @@ export function prepareSolution(solution) {
     section.id ??= `section-${s}`
     section.blocks.forEach((block, b) => { block.id ??= `block-${s}-${b}` })
   })
-  return solution
+  return customerFacingSolution(solution)
 }
 
 export async function registerDocument(baseAbs, id) {
@@ -250,7 +251,7 @@ export async function saveDocument(id, request) {
     if (!Number.isInteger(request?.baseRevision) || request.baseRevision !== current.revision) {
       throw new EditorError(409, `方案已更新到第 ${current.revision} 版，请刷新后再编辑`)
     }
-    if (!Array.isArray(request.changes) || request.changes.length + (request.replacements?.length ?? 0) === 0) {
+    if (!Array.isArray(request.changes) || request.changes.length + (request.replacements?.length ?? 0) + (request.reviewedPaths?.length ?? 0) === 0) {
       throw new EditorError(400, '没有可保存的修改')
     }
     if (request.changes.length > 200) throw new EditorError(400, '单次修改过多')
@@ -258,6 +259,33 @@ export async function saveDocument(id, request) {
     for (const change of request.changes) applyChange(next, change)
     await replaceImages(next, request.replacements ?? [], baseAbs)
     syncPairs(next)
+    next.copyReview ??= []
+    for (const change of request.changes) {
+      if (typeof change.value !== 'string' || !change.value.trim() || next.copyReview.some(item => item.path === change.path)) continue
+      next.copyReview.push({ path: change.path, status: 'pending', value: change.value,
+        original: change.value, reason: request.knowledge?.factChange ? '人工改动涉及事实，需要核对依据' : '文字已修改，需要核对新表述', placeholder: false })
+    }
+    const changedPaths = new Set(request.changes.map(item => item.path))
+    for (const item of next.copyReview ?? []) {
+      if (changedPaths.has(item.path)) {
+        item.status = 'pending'
+        item.confirmedAt = undefined
+        item.confirmedRevision = undefined
+      }
+    }
+    const normalized = customerFacingSolution(next)
+    Object.assign(next, normalized)
+    if (request.reviewedPaths !== undefined && (!Array.isArray(request.reviewedPaths) || request.reviewedPaths.length > 200)) {
+      throw new EditorError(400, '校对确认列表无效')
+    }
+    for (const fieldPath of request.reviewedPaths ?? []) {
+      const item = next.copyReview?.find(item => item.path === fieldPath)
+      if (!item || typeof fieldPath !== 'string') throw new EditorError(400, '校对位置不存在')
+      if (item.placeholder || !item.value?.trim()) throw new EditorError(400, '请先补充该处内容，再确认校对')
+      item.status = 'confirmed'
+      item.confirmedAt = new Date().toISOString()
+      item.confirmedRevision = current.revision + 1
+    }
     next.revision = current.revision + 1
     next.lastEditedAt = new Date().toISOString()
     const proposalId = request.knowledge?.factChange === true ? randomUUID() : undefined

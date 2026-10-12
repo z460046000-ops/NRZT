@@ -341,4 +341,7 @@ test('售前营销正文由模型归纳，技术接口目录不能覆盖客户�
   assert.match(sections[0].blocks[1].text, /来源：CallWan-产品介绍.md/)
   assert.match(prompts[1], /每段以 1—2 个短句为主/u)
   assert.match(prompts[1], /避免.*全链路闭环/u)
+  assert.match(prompts[0], /每句话增加信息/u)
+  assert.match(prompts[1], /不固定章节或强制四字对仗/u)
+  assert.match(prompts[1], /制作提示/u)
 })
