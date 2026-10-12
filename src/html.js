@@ -283,16 +283,18 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
   const family = types.includes('chart') ? 'chart'
     : types.includes('steps') ? 'process'
       : types.includes('image') ? 'evidence'
-        : blocks.length <= 2 && blocks[0]?.type === 'para' && String(leadText).length <= 92 ? 'statement'
+        : blocks.length <= 2 && blocks[0]?.type === 'para'
+          && (blocks.length === 1 || blocks[1]?.type === 'quote')
+          && String(leadText).length <= 92 ? 'statement'
           : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
   const variants = family === 'chart'
     ? blocks.some(block => block.type === 'chart' && block.chartType === 'line')
       ? ['chart-trend', 'chart-wide'] : ['chart-compare', 'chart-wide'] : ({
     statement: ['statement-left', 'statement-right', 'statement-center'],
-    process: ['process-horizontal', 'process-right', 'process-staggered', 'process-track'],
+    process: ['process-horizontal', 'process-right', 'process-staggered', 'process-track', 'process-milestone'],
     evidence: ['evidence-left', 'evidence-right', 'evidence-full'],
     capability: ['capability-left', 'capability-right', 'capability-band', 'capability-map'],
-    editorial: ['editorial-left', 'editorial-right', 'editorial-led'],
+    editorial: ['editorial-left', 'editorial-right', 'editorial-led', 'editorial-feature', 'editorial-columns', 'editorial-band'],
   })[family]
   const seed = [...`${solution.title}:${section.heading}:${pageIndex}`].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
   const notes = blocks.filter(block => block.type === 'quote' && block.text.startsWith('来源：')).length
@@ -301,6 +303,8 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
     ? block.items.filter(item => item.type === 'bullets').flatMap(item => item.items)
     : block.type === 'bullets' ? block.items : [])
   const dense = bulletItems.length >= 5 || bulletItems.some(item => String(item).length > 56)
+  const paras = blocks.filter(block => block.type === 'para')
+  const hasCard = blocks.some(block => block.type === 'bullets' || block.kind === 'cards')
   const preferred = family === 'statement' && notes === 0 ? 'statement-center'
     : family === 'chart' ? blocks.some(block => block.type === 'chart' && block.chartType === 'line') ? 'chart-trend' : 'chart-compare'
       : family === 'process' && stepCount >= 3 && stepCount <= 4
@@ -308,13 +312,27 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
         : family === 'capability' && bulletItems.length >= 3 && bulletItems.length <= 4
           && bulletItems.every(item => String(item).length <= 90) ? 'capability-map'
     : family === 'process' && stepCount >= 4 ? 'process-staggered'
-      : family === 'process' && stepCount <= 2 ? 'process-right'
+      : family === 'process' && stepCount === 1 ? 'process-milestone'
+        : family === 'process' && stepCount === 2 ? 'process-right'
         : family === 'evidence' && notes === 0 ? 'evidence-full'
           : family === 'capability' && dense ? 'capability-right'
             : family === 'capability' && bulletItems.length >= 2 && bulletItems.length <= 4 ? 'capability-band'
-              : family === 'editorial' && String(leadText).length > 180 && blocks.length > 1 ? 'editorial-led' : undefined
-  const usable = variants.filter(item => !recentLayouts.includes(item))
-  const candidates = usable.length ? usable : variants
+              : family === 'editorial' && paras.length >= 3 && !hasCard ? 'editorial-columns'
+                : family === 'editorial' && hasCard && dense ? 'editorial-band'
+                  : family === 'editorial' && hasCard && paras.length === 1 ? 'editorial-feature'
+                    : family === 'editorial' && String(leadText).length > 180 ? 'editorial-led' : undefined
+  const compatible = variants.filter(item => {
+    if (item === 'editorial-feature') return hasCard && paras.length === 1 && !dense
+    if (item === 'editorial-columns') return paras.length >= 3 && !hasCard
+    if (item === 'editorial-band') return hasCard && dense
+    if (item === 'editorial-right') return hasCard || notes > 0
+    if (item === 'editorial-led') return paras.length > 0 && String(leadText).length > 110
+    if (item === 'process-milestone') return stepCount === 1
+    if (item === 'process-track') return stepCount >= 3 && stepCount <= 4
+    return true
+  })
+  const usable = compatible.filter(item => !recentLayouts.includes(item))
+  const candidates = usable.length ? usable : compatible
   return preferred && candidates.includes(preferred) ? preferred : candidates[seed % candidates.length]
 }
 
@@ -536,6 +554,7 @@ function cssFor(t, features) {
   --deck-scale:1;
   --bg:${t.bg};--slide:${t.slideBg};--ink:${t.ink};--ink2:${t.ink2};--ink3:${t.ink3};
   --hero-ink:${t.coverInk};--hero-muted:${t.heroMuted};
+  --feature-bg:${t.coverFrom};--feature-ink:${t.coverInk};--feature-muted:${t.heroMuted};
   --red:${t.red};--blue:${t.blue};--blue-dark:${t.blueDark};
   --editor-action-text:${t.editorActionText};--editor-alert:${t.editorAlert};
   --line:${t.line};--soft:${t.soft};--thead:${t.theadBg};--tint:${t.cardTint};--notice:${t.noticeBg};
@@ -882,6 +901,41 @@ body.single-slide .slide.closing.preview-active{display:flex}
 #release-fields label{display:grid;gap:4px}#release-fields input[type=text],#release-fields select{width:100%;padding:8px;border:1px solid var(--line);background:var(--slide);color:var(--ink)}
 #release-fields label:has(>input[type=checkbox]){display:flex;flex-direction:row-reverse;justify-content:flex-end;align-items:center;gap:9px;min-height:24px}
 #release-fields input[type=checkbox]{width:18px;height:18px}#release-result{overflow-wrap:anywhere}#release-result ul{padding-left:20px}#release-result a{display:inline-block;margin:8px 10px 0 0;color:var(--blue-dark)}
+/* 内容驱动的六种高区分度画面：同一品牌语言，不拿装饰替代事实。 */
+.layout-editorial-feature .body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.85fr);align-items:center;gap:64px}
+.layout-editorial-feature .body>.para{font-size:27px;line-height:1.48;font-weight:640;grid-column:1}
+.layout-editorial-feature .body>.card{grid-column:2;background:var(--feature-bg);border:0;padding:34px 40px;min-height:320px;justify-content:center}
+.layout-editorial-feature .body>.card li{color:var(--feature-ink);font-size:20px;line-height:1.47}
+.layout-editorial-feature .body>.card li+li{padding-top:20px;border-top:1px solid var(--feature-muted)}
+.layout-editorial-columns .body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto 1fr;gap:30px 38px;align-content:start}
+.layout-editorial-columns .body>.para:first-child{grid-column:1/-1;font-size:27px;font-weight:680;line-height:1.45;max-width:1050px;padding-bottom:26px;border-bottom:3px solid var(--red)}
+.layout-editorial-columns .body>.para:not(:first-child){font-size:21px;line-height:1.55;padding:25px 28px;border-left:2px solid var(--blue);background:var(--tint);max-width:none}
+.layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--red)}
+.layout-editorial-band .body{display:grid;grid-template-rows:auto minmax(0,1fr);align-content:start;gap:28px}
+.layout-editorial-band .body>.para{font-size:23px;line-height:1.45;font-weight:620;max-width:1070px}
+.layout-editorial-band .body>.card{min-height:0;padding:18px 34px;background:var(--tint);border:0;border-left:5px solid var(--red);overflow:auto}
+.layout-editorial-band .body>.card .bullets{list-style:none;padding:0}
+.layout-editorial-band .body>.card li{padding:12px 0;font-size:18px;line-height:1.42}
+.layout-editorial-band .body>.card li+li{margin:0;border-top:1px solid var(--line)}
+.layout-editorial-led .body:has(>.para:only-child){display:flex;justify-content:center;border-left:6px solid var(--red);background:var(--tint);margin:0 64px 76px;padding:35px 44px;top:194px;bottom:0}
+.layout-editorial-led .body:has(>.para:only-child)>.para{font-size:28px;line-height:1.52;max-width:960px}
+.layout-process-track{background:var(--feature-bg);color:var(--feature-ink)}
+.layout-process-track .head h2,.layout-process-track .head .lead,.layout-process-track .footer,.layout-process-track .footer .brand,.layout-process-track .header .tag{color:var(--feature-ink)}
+.layout-process-track .head::after{background:var(--feature-muted)}
+.layout-process-track .flow::before{background:var(--feature-muted)}
+.layout-process-track .step i{background:var(--feature-ink);border:0;color:var(--feature-bg);font-size:27px;font-weight:800}
+.layout-process-track .step span{color:var(--feature-ink)}
+.layout-process-track .step-icon{color:var(--feature-muted)}
+.layout-process-milestone .body{justify-content:center}
+.layout-process-milestone .flow{border:0;margin:0}
+.layout-process-milestone .step{display:grid;grid-template-columns:200px minmax(0,1fr);align-items:center;min-height:260px;border-top:3px solid var(--red);padding:24px 0}
+.layout-process-milestone .step::before,.layout-process-milestone .step::after{display:none}
+.layout-process-milestone .step i{font-size:126px;letter-spacing:-.09em;color:var(--red)}
+.layout-process-milestone .step span{font-size:31px;font-weight:650;line-height:1.35;margin:0}
+.relation-alternate{background:var(--feature-bg);color:var(--feature-ink)}
+.relation-alternate .head h2,.relation-alternate .head .lead,.relation-alternate .header .tag,.relation-alternate .footer,.relation-alternate .footer .brand,.relation-alternate .relation-head,.relation-alternate .relation-row small,.relation-alternate .relation-row strong,.relation-alternate .relation-answer strong,.relation-alternate .relation-no{color:var(--feature-ink)}
+.relation-alternate .relation-answer{background:color-mix(in srgb,var(--feature-ink) 12%,transparent);padding:18px 20px}
+.relation-alternate .relation-head,.relation-alternate .relation-row{border-color:color-mix(in srgb,var(--feature-ink) 35%,transparent)}
 ::selection{background:var(--blue);color:#fff}
 @media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`
 }

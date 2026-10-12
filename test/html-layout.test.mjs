@@ -117,3 +117,33 @@ test('简短能力组绘制能力关系图，长要点保持可读列表', () =>
   assert.equal((html.match(/class="map-node"/gu) ?? []).length, 4)
   assert.match(html, /class="bullets"/u)
 })
+
+test('常见纯文字材料也形成不同画面，单步骤不再伪装成多步流程', () => {
+  const solution = { title: '客户增长方案', theme: 'corporate', meta: {}, sections: [
+    { kind: 'trends', heading: '行业变化', blocks: [
+      { type: 'para', text: '业务动作需要连续。'.repeat(7) },
+      { type: 'bullets', items: ['线索、工具、内容、组织需要衔接', '投入增加、响应放缓和复盘困难是常见后果'] },
+    ] },
+    { kind: 'problem_solution', heading: '问题与做法', blocks: [
+      { type: 'para', text: '常见挑战需要逐一回应。' },
+      { type: 'bullets', items: Array.from({ length: 3 }, (_, i) => `第${i + 1}项挑战与对应做法。${'说明'.repeat(35)}`) },
+    ] },
+    { kind: 'capabilities', heading: '产品说明', blocks: [
+      { type: 'para', text: '第一段说明内容和产品关系。' },
+      { type: 'para', text: '第二段说明知识环节。' },
+      { type: 'para', text: '第三段说明执行环节。' },
+    ] },
+    { kind: 'implementation', heading: '最后一步', blocks: [
+      { type: 'steps', items: ['复盘并更新下一轮计划'] },
+    ] },
+  ] }
+  const html = renderHtml(solution, [])
+  assert.match(html, /layout-editorial-feature/u)
+  assert.match(html, /layout-editorial-band/u)
+  assert.match(html, /layout-editorial-columns/u)
+  assert.match(html, /layout-process-milestone/u)
+  assert.doesNotMatch(html, /statement-slide[^>]*layout-editorial-band/u)
+  assert.match(html, /\.layout-process-track\{background:var\(--feature-bg\)/u)
+  assert.match(html, /\.relation-alternate\{background:var\(--feature-bg\)/u)
+  assert.equal(renderHtml(solution, []), html)
+})
