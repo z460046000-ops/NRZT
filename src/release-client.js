@@ -55,9 +55,14 @@
             locate.type = 'button'; locate.textContent = '定位文字'
             locate.addEventListener('click', () => {
               const slides = [...document.querySelectorAll('.slide')]
-              const target = slides.find(slide => slide.textContent.includes(issue.location.term)
+              const scopeText = slide => {
+                if (issue.location.field.startsWith('links/')) return slide.querySelector('.linked-body,.relation-board')?.textContent ?? ''
+                if (issue.location.field.includes('/blocks/')) return slide.querySelector('.body')?.textContent ?? ''
+                return slide.classList.contains('toc-slide') ? '' : slide.textContent
+              }
+              const target = slides.find(slide => scopeText(slide).includes(issue.location.term)
                 && (slide.textContent.includes(issue.location.sectionHeading) || issue.location.sectionHeading === '封面'))
-                ?? slides.find(slide => slide.textContent.includes(issue.location.term))
+                ?? slides.find(slide => scopeText(slide).includes(issue.location.term))
               if (!target) return
               fields.hidden = true
               document.getElementById('release-open').textContent = '外发检查'
