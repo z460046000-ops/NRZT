@@ -72,7 +72,8 @@ function blockWeight(block) {
     case 'metrics': return 4
     case 'chart': return 6.5
     case 'image': return 6.5
-    case 'quote': return 2 + String(block.text).length / 95
+    case 'quote': return String(block.text).startsWith('来源：')
+      ? Math.min(1.5, 0.9 + String(block.text).length / 360) : 2 + String(block.text).length / 95
     default: return 3
   }
 }
@@ -131,7 +132,7 @@ function splitBlock(block) {
   return [block]
 }
 
-/** 相邻的要点块(2-4 个)合成卡片栅格;其余顺序堆叠。 */
+/** 相邻的要点块(2-6 个)合成卡片栅格;其余顺序堆叠。 */
 function groupCards(chunks) {
   const out = []
   let run = []
@@ -438,6 +439,18 @@ function closingSlide(solution, t) {
 </section>`
 }
 
+/** 章节内容决定同一份方案内的浅色阅读节奏；旧稿不额外着色。 */
+function chapterTone(kind, index) {
+  if (['trends', 'context', 'overview'].includes(kind)) return 'amber'
+  if (['pains', 'problem_solution', 'solution'].includes(kind)) return 'coral'
+  if (['capabilities', 'scenarios', 'architecture'].includes(kind)) return 'sky'
+  if (['implementation', 'service'].includes(kind)) return 'sage'
+  return ['amber', 'coral', 'sky', 'sage'][index % 4]
+}
+
+const withTone = (slide, tone) => tone
+  ? slide.replace('<section class="slide ', `<section class="slide tone-${tone} `) : slide
+
 /**
  * 渲染售前解决方案 HTML(集团模板幻灯片风格)。
  * @param {object} solution - normalizeSolution 产物。
@@ -459,7 +472,8 @@ export function renderHtml(solution, assets, options = {}) {
   let contentPages = 0
   const recentLayouts = []
   solution.sections.forEach((section, i) => {
-    slides.push(dividerSlide(solution, section, i + 1, t))
+    const tone = designDirection && solution.theme === 'corporate' ? chapterTone(section.kind, i) : ''
+    slides.push(withTone(dividerSlide(solution, section, i + 1, t), tone))
     if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
       const links = solution.painSolutionLinks.flatMap(paginateLink)
       if (solution.external && section.kind === 'problem_solution') {
@@ -469,11 +483,11 @@ export function renderHtml(solution, assets, options = {}) {
           const next = links[index + 1]
           const pair = short && next && !next.continued && [next.pain, next.solution].every(value => String(value).length <= 90)
           const batch = links.slice(index, index + (pair ? 2 : 1))
-          slides.push(relationSlide(solution, section, batch, page))
+          slides.push(withTone(relationSlide(solution, section, batch, page), tone))
           index += batch.length
         }
       } else for (const [index, link] of links.entries()) {
-        slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains', index))
+        slides.push(withTone(linkedSlide(solution, section, [link], section.kind !== 'pains', index), tone))
       }
       if (section.kind !== 'problem_solution') return
     }
@@ -482,7 +496,7 @@ export function renderHtml(solution, assets, options = {}) {
       const layout = layoutFor(solution, section, pageBlocks, contentPages, recentLayouts)
       recentLayouts.push(layout)
       if (recentLayouts.length > 2) recentLayouts.shift()
-      slides.push(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout))
+      slides.push(withTone(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout), tone))
     }
   })
   slides.push(closingSlide(solution, t))
@@ -973,6 +987,14 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .design-signal .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
 .design-signal .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--blue)}
 .design-signal .layout-editorial-band .body>.card{border-left-color:var(--blue)}
+/* 同一份集团配色方案按章节业务语义安排可读的浅色节奏。 */
+.slide.tone-amber{--slide:#fff8ed;--tint:#f6e8d3;--red:#97420e;--blue:#385c82;--blue-dark:#294f77;--line:rgba(77,55,29,.22)}
+.slide.tone-coral{--slide:#fff3f0;--tint:#f9e2de;--red:#a12827;--blue:#365b81;--blue-dark:#294e72;--line:rgba(92,45,45,.2)}
+.slide.tone-sky{--slide:#eef6fc;--tint:#dcecf7;--red:#a2291e;--blue:#225c8b;--blue-dark:#1d4d76;--line:rgba(34,68,96,.2)}
+.slide.tone-sage{--slide:#eef7f2;--tint:#dceee3;--red:#a02c1d;--blue:#2a6172;--blue-dark:#28545f;--line:rgba(33,77,62,.2)}
+.slide[class*="tone-"].divider{background:var(--slide);color:var(--ink);--hero-ink:var(--ink);--hero-muted:var(--ink2)}
+.slide[class*="tone-"].divider .chap{color:var(--red);opacity:1}
+.slide[class*="tone-"].divider-symbol{color:var(--blue-dark);opacity:.3}
 ::selection{background:var(--blue);color:#fff}
 @media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`
 }

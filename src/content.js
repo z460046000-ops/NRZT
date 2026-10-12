@@ -93,7 +93,17 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
   return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
 }
 
-async function askForJson(ctx, agent, signal, system, input) {
+const parameterError = error => {
+  const code = String(error?.code ?? error?.failure?.code ?? '')
+  const status = Number(error?.status ?? error?.statusCode ?? error?.failure?.status)
+  return code === '1210' || status === 400 || /1210|API 调用参数有误/u.test(String(error?.message ?? error?.failure?.message ?? ''))
+}
+
+async function askForJson(ctx, agent, signal, system, input, stage = 'json') {
+  const started = Date.now()
+  let retryCause
+  const report = (issue, attempt) => console.info('[wlyd-presales] model', JSON.stringify({ stage,
+    ms: Date.now() - started, attempts: attempt + 1, issue, ...(retryCause ? { retryCause } : {}) }))
   let supportsOff = false
   try {
     const info = await ctx.llm.resolveModelInfo?.(agent.options.provider, agent.options.model)
@@ -103,7 +113,7 @@ async function askForJson(ctx, agent, signal, system, input) {
     let text = ''
     let blockText = ''
     let finish
-    for await (const chunk of ctx.llm.stream({
+    try { for await (const chunk of ctx.llm.stream({
       provider: agent.options.provider, model: agent.options.model, system,
       messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
@@ -112,15 +122,32 @@ async function askForJson(ctx, agent, signal, system, input) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
       if (chunk.type === 'finish') finish = chunk.reason
+    } } catch (error) {
+      if (signal?.aborted) throw error
+      if (supportsOff && parameterError(error)) {
+        retryCause = 'reasoning_parameter_rejected'; supportsOff = false; continue
+      }
+      const issue = parameterError(error) ? 'provider_bad_request' : 'model_error'
+      report(issue, attempt)
+      return { issue }
     }
-    if (finish?.kind === 'error' && finish.failure?.code === 'UNSUPPORTED_REASONING_EFFORT' && supportsOff) {
+    if (finish?.kind === 'error' && supportsOff
+      && (finish.failure?.code === 'UNSUPPORTED_REASONING_EFFORT' || parameterError(finish.failure))) {
+      retryCause = 'reasoning_parameter_rejected'
       supportsOff = false
       continue
     }
-    if (finish?.kind !== 'stop') return { issue: finish?.kind === 'error' ? 'model_error' : finish?.kind ?? 'no_finish' }
-    try { return { value: parseJson(text || blockText) } }
-    catch { return { issue: 'invalid_json' } }
+    if (finish?.kind !== 'stop') {
+      const issue = finish?.kind === 'error'
+        ? parameterError(finish.failure) ? 'provider_bad_request' : 'model_error'
+        : finish?.kind ?? 'no_finish'
+      report(issue, attempt)
+      return { issue }
+    }
+    try { const value = parseJson(text || blockText); report('ok', attempt); return { value } }
+    catch { report('invalid_json', attempt); return { issue: 'invalid_json' } }
   }
+  report('model_error', 1)
   return { issue: 'model_error' }
 }
 
@@ -169,7 +196,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     const reply = await askForJson(ctx, agent, signal, system,
       { outline: outline.map(item => ({ heading: item.heading, sourcePaths: item.sourcePaths,
         sourceIds: (item.sourcePaths ?? []).map(path => [...aliases].find(([, value]) => value === path)?.[0]).filter(Boolean) })),
-      sources: limited })
+      sources: limited }, 'draft-all')
     if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
       for (const [index, candidate] of reply.value.sections.entries()) {
         sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources, aliases)
@@ -180,23 +207,31 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     if (signal?.aborted) throw error
     issues.push('model_error')
   }
-  for (const [index, item] of outline.entries()) {
-    if (sections[index] !== fallback[index]) continue
+  const retryChapter = async ([index, item]) => {
     const relevant = [...new Set(sectionEvidencePaths(item, manifest))].filter(sourcePath => sources.has(sourcePath))
       .slice(0, 4).map((sourcePath, position) => ({ id: `S${position + 1}`,
         name: sourcePath.split('/').at(-1), content: sectionSourceExcerpt(sources.get(sourcePath), item), path: sourcePath }))
-    if (!relevant.length) continue
+    if (!relevant.length) return { index, section: fallback[index] }
     const aliases = new Map(relevant.map(source => [source.id, source.path]))
     try {
       const reply = await askForJson(ctx, agent, signal,
         `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点；原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
-        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) })
+        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 'draft-section')
       const candidate = reply.value?.section ?? reply.value
-      sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)
-      if (sections[index] === fallback[index]) issues.push(reply.issue ?? 'unverified_content')
+      const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)
+      return { index, section, issue: section === fallback[index] ? reply.issue ?? 'unverified_content' : undefined }
     } catch (error) {
       if (signal?.aborted) throw error
-      issues.push('model_error')
+      return { index, section: fallback[index], issue: 'model_error' }
+    }
+  }
+  const missingChapters = [...outline.entries()].filter(([index]) => sections[index] === fallback[index])
+  // 最多两章并行，既缩短补写等待，又避免把整份方案同时打向模型服务。
+  for (let index = 0; index < missingChapters.length; index += 2) {
+    const results = await Promise.all(missingChapters.slice(index, index + 2).map(retryChapter))
+    for (const result of results) {
+      sections[result.index] = result.section
+      if (result.issue) issues.push(result.issue)
     }
   }
   return withIssues(sections)
@@ -213,27 +248,14 @@ export async function outlineFromMaterials(ctx, agent, signal, manifest, setting
   const limited = [...sources].slice(0, 12).map(([path, content], index) => ({ id: `K${index + 1}`, path,
     content: content.slice(0, 2600) }))
   const outlineAliases = new Map(limited.map(source => [source.id, source.path]))
-  let text = ''
-  let blockText = ''
-  let finish
   try {
-    for await (const chunk of ctx.llm.stream({
-      provider: route.provider, model: route.model,
-      system: settings.sales
+    const reply = await askForJson(ctx, agent, signal,
+      settings.sales
         ? `你为${settings.product}设计面向客户的${salesScenario(manifest) === 'growth' ? '企业增长/营销' : '企业协同'}售前方案大纲，接触阶段：${settings.stage === 'deep' ? '深入接触' : '初次接触'}。仅输出 JSON：{"outline":[{"heading":"客户能理解的章节标题","topics":["context|problem_solution|capabilities|scenarios|implementation|service|company|boundary|custom"],"sourceIds":["输入中的资料 ID"]}]}。建议 3—6 章，叙事主线是业务背景→目标客户或已知客户的问题→逐项回应的产品方案→场景/实施→有依据的企业介绍；可按材料增减、合并，不固定章数。增长材料聚焦营销链路、线索和数据回流；协同材料聚焦人机协作、真实场景与当前阶段，不混用两条产品线的能力。初次接触不能把行业问题写成该客户事实，深入接触也只能采用已提供的客户事实。接口文档只用于核对产品能力，绝不能用 API、Swagger、认证、请求响应、文档解析等技术目录当章标题。资料不足的章标待确认；公司介绍无材料可省略。公开资料只能作为背景和典型问题的来源，不能进入产品能力章。sourceIds 只能引用输入 sources 中的 ID。章节标题只讲一个判断，尽量 8—18 字；不用“AI 重构”“全链路闭环”等空泛标题。只输出 JSON。`
         : '你只为售前方案设计材料驱动的大纲，不判断客户痛点是否已发生。仅输出 JSON：{"outline":[{"heading":"体现材料具体业务或能力的章节标题","topics":["context|capabilities|architecture|scenarios|implementation|service|boundary|company|custom"],"sourceIds":["输入中的资料 ID"]}]}。根据实际信息给 3—6 章，章节标题具体、彼此不重复；不能用“项目背景与目标”“产品能力与适用场景”等通用模板凑数。没有客户问题依据时，不建立客户问题与方案章，可在边界章提示尚待确认。sourceIds 只能引用输入 sources 中的 ID。章节标题只讲一个判断，尽量 8—18 字；不用空泛套话。只输出 JSON。',
-      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({
-        sources: limited.map(({ id, content }) => ({ id, content })),
-      }) }],
-        source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      signal, sessionId: agent?.session?.id,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
-      if (chunk.type === 'finish') finish = chunk.reason
-    }
-    if (finish?.kind !== 'stop') return fallback
-    const parsed = parseJson(text || blockText)
+      { sources: limited.map(({ id, content }) => ({ id, content })) }, 'outline')
+    if (!reply.value) return fallback
+    const parsed = reply.value
     const proposed = suggestOutline(manifest, [], Array.isArray(parsed.outline) ? parsed.outline.map(item => ({ ...item,
       sourcePaths: [...(item.sourcePaths ?? []), ...(item.sourceIds ?? []).map(id => outlineAliases.get(id))]
         .filter(Boolean),
@@ -287,24 +309,12 @@ function validateLinks(candidate, sources, publicPaths = new Set(), userPaths = 
 
 /** 推断/公开痛点必须再用独立的一轮判断，核对问题、做法和作用机制。 */
 async function reviewMappings(ctx, agent, signal, links, sources) {
-  const route = agent?.options
-  let text = ''
-  let blockText = ''
-  let finish
   try {
-    for await (const chunk of ctx.llm.stream({
-      provider: route.provider, model: route.model,
-      system: '你是独立售前审稿人。逐条核对客户问题与产品做法是否处于同一场景、做法是否直接解决该问题、产品能力是否由内部资料支持。仅输出 JSON：{"pairs":[{"id":"P1","matched":true,"reason":"简短理由"}]}。推断痛点不是已证实的客户事实；公开资料不能证明本公司产品能力。无法判断或不对应时 matched=false。',
-      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify({ links, sources: [...sources].map(([path, content]) => ({ path, content: content.slice(0, 1500) })) }) }],
-        source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      signal, sessionId: agent?.session?.id,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
-      if (chunk.type === 'finish') finish = chunk.reason
-    }
-    if (finish?.kind !== 'stop') return false
-    const answer = parseJson(text || blockText)
+    const reply = await askForJson(ctx, agent, signal,
+      '你是独立售前审稿人。逐条核对客户问题与产品做法是否处于同一场景、做法是否直接解决该问题、产品能力是否由内部资料支持。仅输出 JSON：{"pairs":[{"id":"P1","matched":true,"reason":"简短理由"}]}。推断痛点不是已证实的客户事实；公开资料不能证明本公司产品能力。无法判断或不对应时 matched=false。',
+      { links, sources: [...sources].map(([path, content]) => ({ path, content: content.slice(0, 1500) })) }, 'pair-review')
+    if (!reply.value) return false
+    const answer = reply.value
     return Array.isArray(answer.pairs) && answer.pairs.length === links.length
       && links.every(link => answer.pairs.some(pair => pair.id === link.id && pair.matched === true
         && typeof pair.reason === 'string' && pair.reason.trim().length >= 4))
@@ -363,22 +373,10 @@ export async function assessMaterials(ctx, agent, signal, manifest, userNote, no
     '大纲章节必须从材料实际内容归纳：标题体现材料里的具体主题(产品名、场景、指标、行业等)，禁止用“项目背景与目标”这类通用模板标题凑数；标题只讲一个判断，尽量 8—18 字，避免空泛套话；章数按材料信息量定(约 3—6 章)，材料支持什么就写什么，没有的主题不要硬加；有痛点—方案对应关系时保留 problem_solution 章。每章 sourcePaths 只引用输入中真实存在的材料路径。正文须等用户确认大纲后再生成。',
     '用户本轮补充或公开检索补充都是待核实的输入，不能写成原文件已证实或对外承诺。',
   ].join('\n')
-  let text = ''
-  let blockText = ''
-  let finish
   try {
-    for await (const chunk of ctx.llm.stream({
-      provider: route.provider, model: route.model, system,
-      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: input }],
-        source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      signal, sessionId: agent?.session?.id,
-    })) {
-      if (chunk.type === 'text-delta') text += chunk.text
-      if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
-      if (chunk.type === 'finish') finish = chunk.reason
-    }
-    if (finish?.kind !== 'stop') return { kind: 'question', reason: 'model_unavailable', question: FALLBACK_QUESTION }
-    const answer = parseJson(text || blockText)
+    const reply = await askForJson(ctx, agent, signal, system, JSON.parse(input), 'evidence')
+    if (!reply.value) return { kind: 'question', reason: reply.issue ?? 'model_unavailable', question: FALLBACK_QUESTION }
+    const answer = reply.value
     if (!['ready', 'infer'].includes(answer.decision)) {
       const question = typeof answer.question === 'string' && answer.question.trim()
         ? answer.question.trim() : FALLBACK_QUESTION

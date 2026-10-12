@@ -213,6 +213,61 @@ test('路由误报关闭思考能力时只重试一次默认参数', async () =>
   assert.match(result[0].blocks[0].text, /统一管理资料/u)
 })
 
+test('服务商以 400/1210 拒绝关闭思考参数时，只撤去该参数重试', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: '产品提供统一资料管理。' }] }
+  const outline = [{ heading: '产品价值', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const calls = []
+  const ctx = { llm: {
+    async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } },
+    async *stream(options) {
+      calls.push(options)
+      if (options.reasoningEffort === 'off') {
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: '1210', status: 400 } } }
+        return
+      }
+      yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '产品价值', blocks: [
+        { type: 'para', text: '团队可统一管理资料。', path: 'product.md', quote: '产品提供统一资料管理' },
+      ] }] }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  } }
+  const result = await composeSections(ctx, { options: { provider: 'qifu', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].reasoningEffort, 'off')
+  assert.equal('reasoningEffort' in calls[1], false)
+  assert.match(result[0].blocks[0].text, /统一管理资料/u)
+})
+
+test('整稿失败后只对缺失章节做最多两路并行补写', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: '产品支持按项目管理客户线索。' }] }
+  const outline = Array.from({ length: 4 }, (_, index) => ({
+    heading: `第${index + 1}章`, topics: ['capabilities'], sourcePaths: ['product.md'],
+  }))
+  let active = 0
+  let maximum = 0
+  let retried = 0
+  const ctx = { llm: { async *stream(options) {
+    if (options.system.includes('售前方案撰写员')) {
+      yield { type: 'finish', reason: { kind: 'max-tokens' } }
+      return
+    }
+    active++
+    maximum = Math.max(maximum, active)
+    retried++
+    await new Promise(resolve => setTimeout(resolve, 8))
+    active--
+    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
+      text: '团队可以按项目查看并管理线索。', sourceId: 'S1', quote: '产品支持按项目管理客户线索' }] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(retried, 4)
+  assert.equal(maximum, 2)
+  assert.equal(sections.filter(section => section.blocks[0].text.includes('按项目查看')).length, 4)
+})
+
 test('单章重试能读取长材料靠后的场景依据', async () => {
   const late = '典型场景：销售在项目内查看线索来源，并按负责人完成跟进。'
   const manifest = { files: [{ path: 'CallWan-产品介绍.md', excerpt: `${'增长趋势描述。'.repeat(1700)}\n${late}` }] }

@@ -51,6 +51,28 @@ test('长内容拆页且保留文字，标题层级与视口安全规则存在',
   assert.match(html, /cover-geometry/u)
 })
 
+test('新稿同一份方案按章节内容使用不同浅色调，来源和正文保留', () => {
+  const solution = { title: '增长方案', theme: 'corporate', meta: {},
+    visualDesign: { version: 1, direction: 'redline', seed: 12 }, sections: [
+      { kind: 'trends', heading: '市场背景', blocks: [{ type: 'para', text: '背景事实' },
+        { type: 'quote', text: '来源：背景.md\n背景依据' }] },
+      { kind: 'problem_solution', heading: '挑战与做法', blocks: [{ type: 'para', text: '对应做法' }] },
+      { kind: 'capabilities', heading: '产品能力', blocks: [{ type: 'para', text: '能力事实' }] },
+      { kind: 'implementation', heading: '实施路径', blocks: [{ type: 'para', text: '实施事实' }] },
+    ] }
+  const html = renderHtml(solution, [])
+  for (const tone of ['amber', 'coral', 'sky', 'sage']) assert.match(html, new RegExp(`class="slide tone-${tone}`))
+  for (const tone of ['amber', 'coral', 'sky', 'sage']) {
+    const css = html.match(new RegExp(`\\.slide\\.tone-${tone}\\{([^}]+)\\}`))?.[1]
+    const token = name => css?.match(new RegExp(`--${name}:(#[\\da-f]{6})`, 'iu'))?.[1]
+    assert.ok(contrastRatio('#142034', token('slide')) >= 4.5, `${tone} 正文对比度不足`)
+    for (const accent of ['red', 'blue-dark']) assert.ok(contrastRatio(token(accent), token('slide')) >= 4.5,
+      `${tone} ${accent} 对比度不足`)
+  }
+  for (const text of ['背景事实', '背景依据', '对应做法', '能力事实', '实施事实']) assert.match(html, new RegExp(text))
+  assert.equal(renderHtml(solution, []), html)
+})
+
 test('长段落不走大字主张页，渲染器提供有区别的稳定构图', () => {
   const solution = { title: '客户增长方案', theme: 'corporate', meta: {}, sections: [
     { kind: 'trends', heading: '增长链路的变化正在影响客户触达与销售跟进', blocks: [

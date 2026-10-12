@@ -12,6 +12,8 @@ const PATH_FIELD = /(?:材料(?:路径)?|path)\s*[:：=]\s*(?:`([^`]+)`|"([^"]+)
 const PATH_LIKE = /^(?:\.{0,2}[\\/]|~[\\/]|[^\s]+[\\/]|[^\s]+\.(?:md|txt|csv|json|html|docx|pdf|pptx|zip))\S*$/iu
 const PLATFORM_SOURCE = /材料\s*[:：=]\s*`?(?:平台|内容中台|知识库)`?|内容中台|(?:平台|知识库)(?:上的?|里的?|中的?)?(?:文档|材料|文件)/u
 const FLOW_CANCEL = /^(?:取消|停止|算了|不用了|stop|cancel)[\s。!！.]*$/iu
+const reportTiming = (runId, stage, started, details = {}) => console.info('[wlyd-presales] stage',
+  JSON.stringify({ runId, stage, ms: Date.now() - started, ...details }))
 
 /** 从用户文本中识别明确给出的材料路径；不把普通描述猜成文件名。 */
 export function materialPath(text, command = false) {
@@ -60,8 +62,11 @@ function toolError(result) {
 
 async function generateDraft(ctx, agent, signal, pending, links) {
   const { manifest, runId } = pending
+  const composeStarted = Date.now()
   const sections = await composeSections(ctx, agent, signal, manifest, pending.outline, links,
     pending.auto ? { sales: true, stage: pending.stageType } : {})
+  reportTiming(runId, 'compose', composeStarted, { sections: sections.length,
+    issues: sections.generationIssues ?? [] })
   const substantive = value => typeof value === 'string' && value.trim()
     && !/^(?:待与贵方确认|待补充并确认|尚无证据|本部分内容将在)/u.test(value.trim())
   const isFilled = section => section.blocks.some(block => {
@@ -75,6 +80,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
     const issues = sections.generationIssues ?? []
     const reason = issues.includes('model_unavailable') ? '当前会话没有可用的生成模型'
       : issues.includes('no_readable_source') ? '导入资料中没有可用正文'
+        : issues.includes('provider_bad_request') ? '模型服务拒绝请求参数（HTTP 400 / 1210）'
         : issues.includes('max-tokens') ? '模型输出被截断'
           : issues.includes('model_error') ? '模型调用失败'
             : issues.includes('invalid_json') || issues.includes('invalid_sections')
@@ -83,11 +89,14 @@ async function generateDraft(ctx, agent, signal, pending, links) {
                 : '模型正文或引用未通过校验，具体失败类型未记录'
     const nextStep = issues.includes('unverified_content')
       ? '请确认知识库原文可读取，或补充产品资料后重试；为保证事实准确，本次没有放宽引用校验。'
+      : issues.includes('provider_bad_request')
+        ? '请检查当前模型路由的参数映射；插件已在关闭思考参数可能不兼容时撤去该参数重试一次。'
       : issues.includes('invalid_json') || issues.includes('invalid_sections')
         ? '请检查当前模型的结构化输出能力后重试；也可以补充更清晰的产品与客户资料。'
         : '请检查当前模型后重试，或补充更清晰的产品与客户资料。'
     return { kind: 'error', reason: 'draft_generation', text: `已读取 ${manifest.counts?.extracted ?? 0} 篇资料，但只有 0/${sections.length} 章生成了有依据的正文，因此没有生成空白幻灯片。原因：${reason}。${nextStep}` }
   }
+  const persistStarted = Date.now()
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
     arguments: {
@@ -99,6 +108,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
       output_base: `${runId}/solution`,
     }, agent, signal,
   })
+  reportTiming(runId, 'render-and-save', persistStarted, { status: solution.isError ? 'error' : 'ok' })
   if (solution.isError) {
     const detail = toolError(solution)
     // 会话目录跨服务工作区时写入被沙箱拒绝;这是环境错位,只有新会话能解决。
@@ -180,6 +190,7 @@ async function pullProjectKnowledgeBases(ctx, agent, signal, config, project, ru
 /** 每轮独立暂存已解析文档，避免旧资料与同名文档进入本轮方案。 */
 async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sales) {
   const cfg = resolvePlatformConfig(config ?? {})
+  const retrievalStarted = Date.now()
   const cwd = agent?.session?.header?.cwd ?? process.cwd()
   let docs
   try {
@@ -229,6 +240,7 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
     return { kind: 'error', text: `知识库「${kb.name}」混合检索失败：${err instanceof Error ? err.message : String(err)}` }
   }
   const { results: selectedChunks, coverage } = balanceRetrievalResults(topicResults, documentById)
+  reportTiming(runId, 'hybrid-search', retrievalStarted, { chunks: selectedChunks.length })
   if (selectedChunks.length === 0) {
     return { kind: 'error', text: `知识库「${kb.name}」有 ${ready.length} 篇已解析文档，但混合检索没有返回可用片段。请检查知识库索引和检索接口配置。` }
   }
@@ -313,13 +325,23 @@ async function ingestAndAssess(ctx, agent, signal, inputPath, label, runId, sale
 }
 
 async function generateSalesDraft(ctx, agent, signal, manifest, runId, sales) {
-  let links = []
-  if ((manifest.files ?? []).some(file => file.kind !== 'public' && file.kind !== 'user')) {
-    const assessment = await assessMaterials(ctx, agent, signal, manifest)
-    if (assessment.kind === 'ready') links = assessment.links
-  }
-  const outline = await outlineFromMaterials(ctx, agent, signal, manifest,
-    { sales: true, product: sales.product, stage: sales.stage })
+  const [assessment, outline] = await Promise.all([
+    (async () => {
+      if (!(manifest.files ?? []).some(file => file.kind !== 'public' && file.kind !== 'user')) return undefined
+      const started = Date.now()
+      const result = await assessMaterials(ctx, agent, signal, manifest)
+      reportTiming(runId, 'evidence', started, { status: result.kind, reason: result.reason ?? 'ok' })
+      return result
+    })(),
+    (async () => {
+      const started = Date.now()
+      const result = await outlineFromMaterials(ctx, agent, signal, manifest,
+        { sales: true, product: sales.product, stage: sales.stage })
+      reportTiming(runId, 'outline', started, { sections: result.length })
+      return result
+    })(),
+  ])
+  const links = assessment?.kind === 'ready' ? assessment.links : []
   return generateDraft(ctx, agent, signal, {
     manifest, runId, outline, auto: true, stageType: sales.stage,
     sourceSummary: sales.sourceSummary,
