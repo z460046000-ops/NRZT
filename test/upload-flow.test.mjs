@@ -98,6 +98,9 @@ test('上传意图不把否定句当授权，未指定目标时保留附件并�
   assert.equal(result.pending.stage, 'upload-project')
   const canceled = await resumeUpload({}, {}, new AbortController().signal, pending, '取消', {})
   assert.equal(canceled.kind, 'stopped')
+  const duplicate = await resumeUpload({}, {}, new AbortController().signal,
+    { ...pending, options: [{ id: 'p1', name: '同名项目' }, { id: 'p2', name: '同名项目' }] }, '同名项目', {})
+  assert.equal(duplicate.kind, 'question', '同名项目必须按编号明确选择，不能取第一个')
   const missing = await startUpload({}, {}, new AbortController().signal, '同步到内容中台', [], {})
   assert.equal(missing.pending.stage, 'upload-files')
   const ref = { attachmentId: 'earlier-file', name: 'old.xlsx', bytes: 20 }

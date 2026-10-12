@@ -45,7 +45,8 @@ export async function recentFiles(agent) {
 const pick = (options, answer) => {
   const number = /^(\d+)(?:[.．、\s]|$)/u.exec(answer.trim())
   if (number) return options[Number(number[1]) - 1]
-  return options.find(option => option.id === answer.trim() || option.name === answer.trim())
+  const matches = options.filter(option => option.id === answer.trim() || option.name === answer.trim())
+  return matches.length === 1 ? matches[0] : undefined
 }
 const field = (text, name) => new RegExp(`${name}\\s*[:：=]\\s*([^，,；;\\n]+)`, 'u').exec(text)?.[1]?.trim()
 function question(stage, options, state, label) {
