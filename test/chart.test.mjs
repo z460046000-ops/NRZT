@@ -40,7 +40,7 @@ test('图表在 HTML、Markdown、Word 保留相同数值与来源', async () =>
     assert.match(content, /a\.md/u)
   }
   assert.match(html, /<svg[^>]+role="img"/u)
-  assert.match(html, /layout-chart-wide/u)
+  assert.match(html, /layout-chart-trend/u)
 })
 
 test('外部稿保留图表数值但不泄露内部文件路径和引文', async () => {

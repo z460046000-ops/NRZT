@@ -24,6 +24,8 @@ description: 设计或复核万联智达售前解决方案的 HTML 幻灯片时�
 12. 页面之间交替信息密度和视觉重心：主张页留白，能力页分组，流程页展示方向，证据页放大真实素材，图表页突出数据关系。整份方案保留同一品牌色、字体层级、页边距与依据规则；变化服务于内容，不用装饰图形填空。
 13. 同一 JSON 重新渲染须稳定，不随机换版。渲染器优先按内容长度、要点数量、步骤数和依据是否存在选择构图；在语义相同且条件相近时，再用稳定规则避免相邻页重复。
 14. 比较图和趋势图须由同一段可核对原文支持类别、数值和单位；趋势点按时间排序。资料不足时使用定性关系或流程，不做假数据图。
+15. 运行时从已保存的 P 编号、步骤和能力要点确定性地绘制对照关系、流程轨道和能力关系图；图标只标识章节或节点的既有语义，不承载额外事实。HTML 图形须可在源稿修改后重建，Markdown/Word 继续保留相同文字与顺序。
+16. 以客户阅读顺序决定一页的焦点：标题讲结论，图形讲对应或顺序，来源放辅助层。依 `guides/slide-design.md` 的内容—页型映射选择构图；主题令牌维持统一的色彩、字体与间距，普通文字与背景对比度至少 4.5:1。过长内容退回文字排版或拆页，不为了“好看”删事实。
 
 ## 交付检查
 
@@ -32,8 +34,9 @@ description: 设计或复核万联智达售前解决方案的 HTML 幻灯片时�
 - 检查页码控制旁的来源显示切换：来源注释、痛点依据与表格依据列可一起隐藏和恢复；切换不改变源稿中的证据。
 - 从 HTML 编辑保存一次后，核对 `solution.json`、Markdown、HTML、DOCX 的版本与内容一致；事实变更只提交知识审核。
 - 图表数据在 HTML 编辑后标待确认；Markdown/Word 输出同一组数字、单位与原始依据，不能只改图形不改源稿。
+- 按层级、对比度、排版、间距、控件状态、边界六项复核；上一页/下一页等控件可见焦点，最小点击高度 44px。静态测试只能验证规则和对比度，仍需逐页查看实际视觉效果。
 - 结果消息须有可见的结构预览、明确的编辑入口和已认证的源稿下载地址；本地相对文件路径不能当浏览器链接。
 
 ## 来源与边界
 
-本规则为售前插件的原创适配，参考 Codex `impeccable` 的层级检查、`html-design-master` 的图文节奏、`guizang-ppt-skill` 的语义页型，以及 [SkillHub html-ppt-skill 2.3.0](https://skillhub.cn/skills/user_e9af5021/html-ppt-skill) 的视口安全与排版检查思路；未复制其模板或源码。它不提供 WorkBuddy `tencent-pptx`、Ardot 或可编辑 PPTX 导出。
+本规则为售前插件的原创适配，参考 Codex `impeccable` 的层级检查、`html-design-master` 的图文节奏、`guizang-ppt-skill` 的语义页型，[SkillHub html-ppt-skill 2.3.0](https://skillhub.cn/skills/user_e9af5021/html-ppt-skill) 的视口安全思路，以及 [ui-new](https://skillhub.cn/skills/user_865e3592/ui-new) 与 [ui-ux-designer](https://skillhub.cn/skills/user_ad872d55/ui-ux-designer) 的视觉审查和设计系统方法；未复制这些 Skill 的模板或源码。它不提供 WorkBuddy `tencent-pptx`、Ardot 或可编辑 PPTX 导出。

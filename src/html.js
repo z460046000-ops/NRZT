@@ -7,6 +7,7 @@
 
 import { readFileSync } from 'node:fs'
 import { painBasisLabel } from './pain-basis.js'
+import { iconForText, semanticIcon } from './visual-language.js'
 
 const EDITOR_SCRIPT = readFileSync(new URL('./editor-client.js', import.meta.url), 'utf8')
 const RELEASE_SCRIPT = readFileSync(new URL('./release-client.js', import.meta.url), 'utf8')
@@ -27,7 +28,7 @@ const THEMES = {
   },
   dark: {
     bg: '#0b1020', slideBg: '#121a30', ink: '#e2e8f0', ink2: '#a8b3c7', ink3: '#7a86a0',
-    red: '#e5484d', blue: '#38bdf8', blueDark: '#0ea5e9',
+    red: '#e85d62', blue: '#38bdf8', blueDark: '#0ea5e9',
     line: 'rgba(148,163,184,.22)', soft: 'rgba(148,163,184,.10)',
     editorActionText: '#0b1020', editorAlert: '#ff9194',
     theadBg: '#1b2647', cardTint: '#182238', noticeBg: '#231a2e',
@@ -38,8 +39,8 @@ const THEMES = {
     font: "'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif",
   },
   elegant: {
-    bg: '#e5ddd0', slideBg: '#fffdf8', ink: '#2c2014', ink2: '#5c4f3d', ink3: '#8a7a63',
-    red: '#bc6c25', blue: '#92400e', blueDark: '#7c3a0c',
+    bg: '#e5ddd0', slideBg: '#fffdf8', ink: '#2c2014', ink2: '#5c4f3d', ink3: '#77674f',
+    red: '#a95b1c', blue: '#92400e', blueDark: '#7c3a0c',
     line: 'rgba(92,79,61,.22)', soft: 'rgba(92,79,61,.09)',
     editorActionText: '#1e1409', editorAlert: '#82400d',
     theadBg: '#f3ead9', cardTint: '#faf6ee', noticeBg: '#fdf3e3',
@@ -169,11 +170,15 @@ function paginateBlocks(blocks) {
 
 // ── 块渲染 ────────────────────────────────────────────────────────
 
-function renderBlock(block, assetByName, features) {
+function renderBlock(block, assetByName, features, sectionKind = '') {
   switch (block.type) {
     case 'para':
       return `<p class="para${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${esc(block.text)}</p>`
     case 'bullets':
+      if (['capabilities', 'scenarios'].includes(sectionKind) && block.items.length >= 3
+        && block.items.length <= 4 && block.items.every(item => String(item).length <= 90)) {
+        return `<div class="capability-map" role="group" aria-label="能力关系图"><div class="map-hub">${semanticIcon(sectionKind)}<strong>能力组合</strong></div><div class="map-nodes">${block.items.map(item => `<div class="map-node">${semanticIcon(iconForText(item))}<span>${esc(item)}</span></div>`).join('')}</div></div>`
+      }
       return `<div class="card"><ul class="bullets">${block.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`
     case 'quote':
       if (block.text.startsWith('来源：') && block.text.includes('\n')) {
@@ -183,8 +188,8 @@ function renderBlock(block, assetByName, features) {
       }
       return `<blockquote class="editorial-quote${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${esc(block.text)}</blockquote>`
     case 'steps':
-      return `<div class="flow" style="grid-template-columns:repeat(${Math.min(block.items.length, 4)},1fr)">`
-        + block.items.map((item, i) => `<div class="step"><i>${String(block.numbers?.[i] ?? i + 1).padStart(2, '0')}</i><span>${esc(item)}</span></div>`).join('')
+      return `<div class="flow" style="--step-count:${Math.min(block.items.length, 4)};grid-template-columns:repeat(${Math.min(block.items.length, 4)},1fr)">`
+        + block.items.map((item, i) => `<div class="step"><i>${String(block.numbers?.[i] ?? i + 1).padStart(2, '0')}</i>${semanticIcon(iconForText(item, 'implementation'), 'step-icon')}<span>${esc(item)}</span></div>`).join('')
         + '</div>'
     case 'table': {
       const evidenceColumns = block.headers.map(header => /来源|依据|出处/u.test(header))
@@ -226,11 +231,11 @@ function renderChart(block) {
   return `<figure class="data-chart ${block.chartType === 'line' ? 'trend-chart' : 'comparison-chart'}"><figcaption><h3>${esc(block.title)}</h3><span>${esc(block.unit)}${pending ? ' · 待确认' : ''}</span></figcaption>${body}${source}</figure>`
 }
 
-function renderCard(block, assetByName, features) {
+function renderCard(block, assetByName, features, sectionKind) {
   if (block.type === 'quote') {
-    return renderBlock(block, assetByName, features)
+    return renderBlock(block, assetByName, features, sectionKind)
   }
-  return `<div class="card"><ul class="bullets">${block.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`
+  return `<div class="card">${['capabilities', 'scenarios'].includes(sectionKind) ? semanticIcon(iconForText(block.items.join(' ')), 'card-icon') : ''}<ul class="bullets">${block.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`
 }
 
 // ── 页面渲染 ──────────────────────────────────────────────────────
@@ -267,6 +272,7 @@ function dividerSlide(solution, section, no, t) {
     <h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>
     ${section.lead ? `<p>${esc(section.lead)}</p>` : ''}
   </div>
+  <div class="divider-symbol">${semanticIcon(section.kind)}</div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
 </section>`
 }
@@ -279,11 +285,13 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
       : types.includes('image') ? 'evidence'
         : blocks.length <= 2 && blocks[0]?.type === 'para' && String(leadText).length <= 92 ? 'statement'
           : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
-  const variants = family === 'chart' ? ['chart-wide'] : ({
+  const variants = family === 'chart'
+    ? blocks.some(block => block.type === 'chart' && block.chartType === 'line')
+      ? ['chart-trend', 'chart-wide'] : ['chart-compare', 'chart-wide'] : ({
     statement: ['statement-left', 'statement-right', 'statement-center'],
-    process: ['process-horizontal', 'process-right', 'process-staggered'],
+    process: ['process-horizontal', 'process-right', 'process-staggered', 'process-track'],
     evidence: ['evidence-left', 'evidence-right', 'evidence-full'],
-    capability: ['capability-left', 'capability-right', 'capability-band'],
+    capability: ['capability-left', 'capability-right', 'capability-band', 'capability-map'],
     editorial: ['editorial-left', 'editorial-right', 'editorial-led'],
   })[family]
   const seed = [...`${solution.title}:${section.heading}:${pageIndex}`].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
@@ -294,6 +302,11 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
     : block.type === 'bullets' ? block.items : [])
   const dense = bulletItems.length >= 5 || bulletItems.some(item => String(item).length > 56)
   const preferred = family === 'statement' && notes === 0 ? 'statement-center'
+    : family === 'chart' ? blocks.some(block => block.type === 'chart' && block.chartType === 'line') ? 'chart-trend' : 'chart-compare'
+      : family === 'process' && stepCount >= 3 && stepCount <= 4
+        && blocks.filter(block => block.type === 'steps').every(block => block.items.every(item => String(item).length <= 78)) ? 'process-track'
+        : family === 'capability' && bulletItems.length >= 3 && bulletItems.length <= 4
+          && bulletItems.every(item => String(item).length <= 90) ? 'capability-map'
     : family === 'process' && stepCount >= 4 ? 'process-staggered'
       : family === 'process' && stepCount <= 2 ? 'process-right'
         : family === 'evidence' && notes === 0 ? 'evidence-full'
@@ -311,9 +324,9 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
   const body = blocks.map(group => {
     if (group.kind === 'cards') {
-      return `<div class="grid g${group.cols}">${group.items.map(b => renderCard(b, assetByName, features)).join('')}</div>`
+      return `<div class="grid g${group.cols}">${group.items.map(b => renderCard(b, assetByName, features, section.kind)).join('')}</div>`
     }
-    return renderBlock(group, assetByName, features)
+    return renderBlock(group, assetByName, features, section.kind)
   }).join('\n')
   const gap = blocks.length > 1 ? ' style="gap:20px"' : ''
   const tag = solution.meta.product ?? solution.title
@@ -365,6 +378,20 @@ function linkedSlide(solution, section, links, solutionPage, index = 0) {
 </section>`
 }
 
+/** 外部稿把已建立的 P 编号关系画成可扫描的对照图，不添加新结论。 */
+function relationSlide(solution, section, links, index) {
+  const tag = solution.meta.product ?? solution.title
+  return `<section class="slide relation-slide ${index % 2 ? 'relation-alternate' : ''}">
+  <div class="header"><div class="tag">${esc(tag)}</div></div>
+  <div class="head"><h2>${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
+  <div class="relation-board" role="group" aria-label="客户挑战与对应做法">
+    <div class="relation-head"><span>客户挑战</span><span>对应做法</span></div>
+    ${links.map(link => `<div class="relation-row"><span class="relation-no">${esc(link.id)}</span><div class="relation-problem"><small>${esc(link.painBasis && link.painBasis !== 'explicit' ? painBasisLabel(link) : '客户挑战')}</small><strong>${esc(link.pain)}</strong></div><div class="relation-connector" aria-hidden="true"><span></span></div><div class="relation-answer"><small>对应做法</small><strong>${esc(link.solution)}</strong></div></div>`).join('')}
+  </div>
+  <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
+</section>`
+}
+
 function closingSlide(solution, t) {
   return `<section class="slide closing">
   <div>
@@ -395,7 +422,18 @@ export function renderHtml(solution, assets, options = {}) {
   solution.sections.forEach((section, i) => {
     slides.push(dividerSlide(solution, section, i + 1, t))
     if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
-      for (const [index, link] of solution.painSolutionLinks.flatMap(paginateLink).entries()) {
+      const links = solution.painSolutionLinks.flatMap(paginateLink)
+      if (solution.external && section.kind === 'problem_solution') {
+        for (let index = 0, page = 0; index < links.length; page++) {
+          const first = links[index]
+          const short = [first.pain, first.solution].every(value => String(value).length <= 90)
+          const next = links[index + 1]
+          const pair = short && next && !next.continued && [next.pain, next.solution].every(value => String(value).length <= 90)
+          const batch = links.slice(index, index + (pair ? 2 : 1))
+          slides.push(relationSlide(solution, section, batch, page))
+          index += batch.length
+        }
+      } else for (const [index, link] of links.entries()) {
         slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains', index))
       }
       if (section.kind !== 'problem_solution') return
@@ -501,6 +539,7 @@ function cssFor(t, features) {
   --red:${t.red};--blue:${t.blue};--blue-dark:${t.blueDark};
   --editor-action-text:${t.editorActionText};--editor-alert:${t.editorAlert};
   --line:${t.line};--soft:${t.soft};--thead:${t.theadBg};--tint:${t.cardTint};--notice:${t.noticeBg};
+  --space-xs:8px;--space-sm:16px;--space-md:24px;--space-lg:40px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-snap-type:y proximity;scroll-behavior:smooth}
@@ -546,9 +585,11 @@ body{background:var(--bg);font-family:${t.font};color:var(--ink);padding:28px 0;
 .pair-map p{margin-top:18px}
 .pair-arrow{display:grid;place-items:center;font-size:28px;color:var(--red);font-weight:700}
 .deck-controls{position:fixed;z-index:100;right:24px;bottom:24px;display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--slide);border:1px solid var(--line);box-shadow:0 6px 18px rgba(0,0,0,.14);font-size:13px}
-.deck-controls button{border:1px solid var(--line);background:var(--slide);color:var(--ink);padding:7px 12px;cursor:pointer;font:inherit}
+.deck-controls button{min-height:44px;border:1px solid var(--line);background:var(--slide);color:var(--ink);padding:7px 12px;cursor:pointer;font:inherit}
 .sources-hidden .source-note,.sources-hidden .source-evidence{display:none!important}
 .deck-controls button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.deck-controls button:hover{background:var(--tint)}
+.deck-controls button:active{transform:translateY(1px)}
 @media(max-width:560px){.deck-controls{left:8px;right:8px;bottom:8px;justify-content:center;flex-wrap:wrap;gap:5px}.deck-controls button{padding:6px 8px}}
 .deck-controls .edit-toggle,.editor-footer>button{background:var(--red);color:var(--editor-action-text);border-color:var(--red);font-weight:700}
 .editor-panel{position:fixed;z-index:110;top:0;right:0;bottom:0;width:410px;background:var(--slide);box-shadow:-8px 0 30px rgba(0,0,0,.17);display:flex;flex-direction:column;color:var(--ink);font-size:14px}
@@ -767,6 +808,49 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .divider-light .chap{color:var(--red);opacity:1}
 .divider-light h2{color:var(--ink)}
 .divider-light p{color:var(--ink2)}
+.semantic-icon{display:block;width:32px;height:32px;flex:none}
+.divider .inner{z-index:2;max-width:850px}
+.divider-symbol{position:absolute;right:78px;top:220px;width:220px;height:220px;display:grid;place-items:center;border:1px solid currentColor;color:var(--hero-muted);opacity:.48}
+.divider-symbol::before,.divider-symbol::after{content:"";position:absolute;width:42px;height:1px;background:currentColor}
+.divider-symbol::before{left:-21px;top:50%}.divider-symbol::after{right:-21px;top:50%}
+.divider-symbol .semantic-icon{width:112px;height:112px;stroke-width:1.1}
+.divider-light .divider-symbol{color:var(--blue-dark);opacity:.45}
+.card-icon{width:28px;height:28px;color:var(--blue-dark);margin-bottom:12px}
+.step-icon{display:none;width:31px;height:31px;color:var(--blue-dark);margin-top:17px}
+.layout-process-track .flow{display:grid!important;grid-template-columns:repeat(var(--step-count),minmax(0,1fr))!important;gap:0;border-top:0;margin-top:26px;align-items:start}
+.layout-process-track .flow::before{content:"";position:absolute;top:52px;left:24px;right:24px;height:2px;background:var(--line)}
+.layout-process-track .step{min-height:285px;padding:0 24px 0 0;border:0;display:flex;flex-direction:column;align-items:flex-start}
+.layout-process-track .step::before,.layout-process-track .step::after{display:none}
+.layout-process-track .step i{display:grid;place-items:center;width:104px;height:104px;border:1px solid var(--blue);background:var(--slide);font-size:23px;color:var(--ink);z-index:1}
+.layout-process-track .step:nth-child(even) i{border-color:var(--red)}
+.layout-process-track .step span{max-width:230px;margin-top:16px;font-size:19px;line-height:1.45}
+.layout-process-track .step-icon{display:block;position:absolute;top:36px;left:122px;margin:0;width:29px;height:29px}
+.capability-map{display:grid;grid-template-columns:280px minmax(0,1fr);gap:56px;align-items:center;width:100%;height:100%;min-height:310px}
+.map-hub{position:relative;display:flex;flex-direction:column;justify-content:center;gap:16px;align-items:flex-start;height:250px;padding:38px;border-top:2px solid var(--red);background:var(--tint);font-size:25px;color:var(--ink)}
+.map-hub::after{content:"";position:absolute;right:-56px;top:50%;width:56px;height:1px;background:var(--blue)}
+.map-hub .semantic-icon{width:51px;height:51px;color:var(--red)}
+.map-nodes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;align-content:center}
+.map-node{display:flex;align-items:flex-start;gap:15px;min-height:112px;padding:18px 0;border-top:1px solid var(--line);font-size:18px;line-height:1.42;color:var(--ink)}
+.map-node .semantic-icon{width:27px;height:27px;color:var(--blue-dark)}
+.relation-board{position:absolute;top:193px;left:64px;right:64px;bottom:75px;display:flex;flex-direction:column;gap:0;overflow:auto}
+.relation-head{display:grid;grid-template-columns:1fr 1fr;gap:92px;margin-left:69px;padding:0 0 14px;font-size:16px;font-weight:750;color:var(--ink2);border-bottom:1px solid var(--line)}
+.relation-row{display:grid;grid-template-columns:54px minmax(0,1fr) 74px minmax(0,1fr);gap:16px;align-items:stretch;flex:1;min-height:0;border-bottom:1px solid var(--line)}
+.relation-no{align-self:center;font-size:20px;font-weight:780;color:var(--red)}
+.relation-problem,.relation-answer{display:flex;flex-direction:column;justify-content:center;gap:14px;padding:18px 0}
+.relation-row small{font-size:13px;font-weight:700;color:var(--ink3)}
+.relation-row strong{font-size:22px;line-height:1.35;font-weight:720;color:var(--ink);overflow-wrap:anywhere}
+.relation-answer strong{color:var(--blue-dark)}
+.relation-connector{position:relative;display:grid;place-items:center}
+.relation-connector span{position:relative;width:100%;height:1px;background:var(--red)}
+.relation-connector span::after{content:"";position:absolute;right:0;top:-5px;width:10px;height:10px;border-top:1px solid var(--red);border-right:1px solid var(--red);transform:rotate(45deg)}
+.relation-alternate .relation-no{color:var(--blue-dark)}
+.layout-chart-compare .chart-row{grid-template-columns:210px minmax(0,1fr) 145px;min-height:55px}
+.layout-chart-compare .chart-track{height:29px;background:transparent;border-bottom:1px solid var(--line)}
+.layout-chart-compare .chart-track span{background:var(--blue)}
+.layout-chart-compare .chart-row:nth-child(even) .chart-track span{background:var(--red)}
+.layout-chart-trend .chart-line svg{height:300px}
+.layout-chart-trend .chart-path{stroke-width:4}
+.layout-chart-trend .chart-dot{r:8}
 .data-chart{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;gap:18px;margin:0}
 .data-chart figcaption{display:flex;justify-content:space-between;gap:24px;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px}
 .data-chart figcaption h3{font-size:25px;line-height:1.25;font-weight:740;color:var(--ink)}
