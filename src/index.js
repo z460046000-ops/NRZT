@@ -26,6 +26,7 @@ import { painWithBasis } from './pain-basis.js'
 import { isSafeDisplayText } from './source-quality.js'
 import { customerFacingSolution } from './customer-copy.js'
 import { normalizeChart } from './chart.js'
+import { assignVisualDesign } from './visual-plan.js'
 
 /** Cordis Loader 身份。 */
 export const name = 'wlyd-presales-solution'
@@ -345,7 +346,7 @@ const OUTLINE_INSTRUCTION = '请根据下方用户已确认的大纲生成售前
  * 落盘方案的三份交付物与 .json 源,注册编辑器并返回统一输出结构。
  * wlyd_solution 与 wlyd_platform_render 共用。
  */
-async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets, assetViews, warnings, extraOutput }) {
+async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets, assetViews, warnings, extraOutput, themeExplicit = false }) {
   const substantive = value => typeof value === 'string' && value.trim()
     && !/^(?:待与贵方确认|待补充并确认|尚无证据|本部分内容将在)/u.test(value.trim())
   const filled = solution.sections.filter(section => section.blocks.some(block => {
@@ -367,6 +368,8 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
   }
   const baseAbs = path.resolve(cwd, base)
   const assetsDirName = `${path.basename(base)}-assets`
+
+  await assignVisualDesign(solution, { themeExplicit })
 
   const markdown = renderMarkdown(solution, assetViews)
   const html = renderHtml(solution, assetViews)
@@ -715,7 +718,7 @@ export function apply(ctx, config) {
           },
         },
       },
-      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '视觉主题,默认 corporate(集团模板红蓝风格)' },
+      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选固定视觉主题；未指定时新方案轮换设计方向与配色' },
       output_base: { type: 'string', description: '输出文件名基底(不含扩展名),默认 solution' },
     },
     output: {
@@ -751,7 +754,8 @@ export function apply(ctx, config) {
       signal.throwIfAborted()
 
       const assetViews = assets.map(a => ({ sourcePath: a.sourcePath, fileName: `${`${path.basename(base)}-assets`}/${a.fileName}`, caption: a.caption }))
-      return persistSolution(ctx, exec, solution, { base, cwd, signal, assets, assetViews, warnings, extraOutput: {} })
+      return persistSolution(ctx, exec, solution, { base, cwd, signal, assets, assetViews, warnings,
+        extraOutput: {}, themeExplicit: nonEmpty(args.theme) })
     },
     presentCall: args => ({
       card: 'generic',
@@ -960,7 +964,7 @@ export function apply(ctx, config) {
       project_id: { type: 'string', required: true, description: '平台项目 ID' },
       document_id: { type: 'string', required: true, description: '平台文档 ID(wlyd_platform_generate 返回)' },
       output_base: { type: 'string', description: '输出文件名基底,默认 platform-solution' },
-      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '视觉主题,默认 corporate' },
+      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选固定视觉主题；未指定时轮换设计方向与配色' },
     },
     output: {
       schema: {
@@ -999,7 +1003,7 @@ export function apply(ctx, config) {
       const base = (nonEmpty(args.output_base) ? args.output_base.trim() : 'platform-solution').replace(/\.(md|html|docx)$/i, '')
       return persistSolution(ctx, exec, solution, {
         base, cwd, signal, assets: [], assetViews: [], warnings: [],
-        extraOutput: { platformDocumentId: doc.id },
+        extraOutput: { platformDocumentId: doc.id }, themeExplicit: nonEmpty(args.theme),
       })
     },
     presentCall: args => ({

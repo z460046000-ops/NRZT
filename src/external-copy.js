@@ -46,6 +46,7 @@ export function externalizeSolution(source, assetNames = new Map()) {
   return {
     external: true,
     title: displayText(source.title), subtitle: displayText(source.subtitle ?? ''), theme: source.theme,
+    ...(source.visualDesign ? { visualDesign: structuredClone(source.visualDesign) } : {}),
     meta: {
       company: displayText(source.meta?.company ?? ''), product: displayText(source.meta?.product ?? ''),
       version: displayText(source.meta?.version ?? ''), date: source.meta?.date ?? '',

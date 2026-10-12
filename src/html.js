@@ -243,7 +243,9 @@ function renderCard(block, assetByName, features, sectionKind) {
 function coverSlide(solution, t) {
   const meta = solution.meta
   const titleSize = solution.title.length > 70 ? 46 : solution.title.length > 35 ? 56 : 68
-  const offset = [...solution.title].reduce((value, char) => value + char.codePointAt(0), 0) % 2 === 1
+  const offset = solution.visualDesign?.direction
+    ? ['paper', 'signal'].includes(solution.visualDesign.direction)
+    : [...solution.title].reduce((value, char) => value + char.codePointAt(0), 0) % 2 === 1
   return `<section class="slide cover${offset ? ' cover-offset' : ''}">
   <div class="cover-top"><span>${esc(meta.company ?? '')}</span><span>${esc(meta.date ?? '')}</span></div>
   <div class="cover-grid"><div class="cover-main">
@@ -296,7 +298,10 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
     capability: ['capability-left', 'capability-right', 'capability-band', 'capability-map'],
     editorial: ['editorial-left', 'editorial-right', 'editorial-led', 'editorial-feature', 'editorial-columns', 'editorial-band'],
   })[family]
-  const seed = [...`${solution.title}:${section.heading}:${pageIndex}`].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
+  const design = solution.visualDesign
+  const seedText = design ? `${design.seed}:${section.kind}:${section.heading}:${pageIndex}`
+    : `${solution.title}:${section.heading}:${pageIndex}`
+  const seed = [...seedText].reduce((value, char) => (value * 31 + char.codePointAt(0)) >>> 0, 17)
   const notes = blocks.filter(block => block.type === 'quote' && block.text.startsWith('来源：')).length
   const stepCount = blocks.filter(block => block.type === 'steps').reduce((count, block) => count + block.items.length, 0)
   const bulletItems = blocks.flatMap(block => block.kind === 'cards'
@@ -322,6 +327,10 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
                   : family === 'editorial' && hasCard && paras.length === 1 ? 'editorial-feature'
                     : family === 'editorial' && String(leadText).length > 180 ? 'editorial-led' : undefined
   const compatible = variants.filter(item => {
+    if (family === 'process' && stepCount === 1) return item === 'process-milestone'
+    if (item === 'process-right') return stepCount === 2
+    if (item === 'process-horizontal') return stepCount >= 2
+    if (item === 'process-staggered') return stepCount >= 3
     if (item === 'editorial-feature') return hasCard && paras.length === 1 && !dense
     if (item === 'editorial-columns') return paras.length >= 3 && !hasCard
     if (item === 'editorial-band') return hasCard && dense
@@ -329,10 +338,19 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
     if (item === 'editorial-led') return paras.length > 0 && String(leadText).length > 110
     if (item === 'process-milestone') return stepCount === 1
     if (item === 'process-track') return stepCount >= 3 && stepCount <= 4
+      && blocks.filter(block => block.type === 'steps').every(block => block.items.every(item => String(item).length <= 78))
+    if (item === 'capability-map') return ['capabilities', 'scenarios'].includes(section.kind)
+      && bulletItems.length >= 3 && bulletItems.length <= 4
+      && bulletItems.every(item => String(item).length <= 90)
     return true
   })
-  const usable = compatible.filter(item => !recentLayouts.includes(item))
-  const candidates = usable.length ? usable : compatible
+  const valid = compatible.length ? compatible : variants
+  const usable = valid.filter(item => !recentLayouts.includes(item))
+  const candidates = usable.length ? usable : valid
+  if (design && ['redline', 'paper', 'night', 'signal'].includes(design.direction)) {
+    const directionIndex = ['redline', 'paper', 'night', 'signal'].indexOf(design.direction)
+    return candidates[(seed + directionIndex) % candidates.length]
+  }
   return preferred && candidates.includes(preferred) ? preferred : candidates[seed % candidates.length]
 }
 
@@ -399,7 +417,8 @@ function linkedSlide(solution, section, links, solutionPage, index = 0) {
 /** 外部稿把已建立的 P 编号关系画成可扫描的对照图，不添加新结论。 */
 function relationSlide(solution, section, links, index) {
   const tag = solution.meta.product ?? solution.title
-  return `<section class="slide relation-slide ${index % 2 ? 'relation-alternate' : ''}">
+  const flip = solution.visualDesign?.direction === 'night' || solution.visualDesign?.direction === 'signal' ? 1 : 0
+  return `<section class="slide relation-slide ${(index + flip) % 2 ? 'relation-alternate' : ''}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2>${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
   <div class="relation-board" role="group" aria-label="客户挑战与对应做法">
@@ -428,6 +447,8 @@ function closingSlide(solution, t) {
 export function renderHtml(solution, assets, options = {}) {
   const preview = options.externalPreview
   const t = THEMES[solution.theme] ?? THEMES.corporate
+  const designDirection = ['redline', 'paper', 'night', 'signal'].includes(solution.visualDesign?.direction)
+    ? solution.visualDesign.direction : ''
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
   const features = { hasImage: false }
 
@@ -486,7 +507,7 @@ export function renderHtml(solution, assets, options = {}) {
 ${cssFor(t, features)}
 </style>
 </head>
-<body${solution.editorId ? ` data-editor-id="${esc(solution.editorId)}"` : ''}${preview ? ` data-editor-id="${esc(preview.editorId)}" data-revision="${esc(preview.revision)}"` : ''}>
+<body${designDirection ? ` class="design-${designDirection}"` : ''}${solution.editorId ? ` data-editor-id="${esc(solution.editorId)}"` : ''}${preview ? ` data-editor-id="${esc(preview.editorId)}" data-revision="${esc(preview.revision)}"` : ''}>
 <main class="deck">
 ${slides.join('\n')}
 </main>
@@ -936,6 +957,22 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .relation-alternate .head h2,.relation-alternate .head .lead,.relation-alternate .header .tag,.relation-alternate .footer,.relation-alternate .footer .brand,.relation-alternate .relation-head,.relation-alternate .relation-row small,.relation-alternate .relation-row strong,.relation-alternate .relation-answer strong,.relation-alternate .relation-no{color:var(--feature-ink)}
 .relation-alternate .relation-answer{background:color-mix(in srgb,var(--feature-ink) 12%,transparent);padding:18px 20px}
 .relation-alternate .relation-head,.relation-alternate .relation-row{border-color:color-mix(in srgb,var(--feature-ink) 35%,transparent)}
+/* 四个原创视觉方向只改变表达，不改变文字事实和品牌标识。 */
+.design-paper .cover h1,.design-paper .divider h2,.design-paper .content-slide .head h2,.design-paper .linked-slide .head h2,.design-paper .relation-slide .head h2{font-family:'Songti SC','Noto Serif SC',serif;font-weight:700}
+.design-paper .content-slide .head::after,.design-paper .linked-slide .head::after{width:94px;height:3px;background:var(--red)}
+.design-paper .layout-editorial-columns .body>.para:not(:first-child),.design-paper .layout-editorial-band .body>.card{background:var(--tint);border-left-color:var(--red)}
+.design-paper .relation-answer{background:var(--tint);padding:18px 20px}
+.design-night .content-slide .head::after,.design-night .linked-slide .head::after{width:110px;background:var(--blue)}
+.design-night .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
+.design-night .layout-editorial-band .body>.card{border-left-color:var(--blue)}
+.design-signal{--hero-ink:#fff;--feature-ink:#fff;--feature-muted:#c6d9ed}
+.design-signal .cover,.design-signal .divider:not(.divider-light),.design-signal .closing{background:#0e365f;color:var(--hero-ink)}
+.design-signal .cover-geometry::before,.design-signal .cover-geometry span:nth-child(2){background:var(--hero-ink)}
+.design-signal .content-slide .head::after,.design-signal .linked-slide .head::after{width:112px;height:3px;background:var(--blue)}
+.design-signal .layout-editorial-feature .body>.card,.design-signal .layout-process-track,.design-signal .relation-alternate{background:#0e365f}
+.design-signal .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
+.design-signal .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--blue)}
+.design-signal .layout-editorial-band .body>.card{border-left-color:var(--blue)}
 ::selection{background:var(--blue);color:#fff}
 @media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`
 }
