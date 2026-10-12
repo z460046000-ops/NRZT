@@ -28,6 +28,8 @@ export function cleanMaterialText(value, sourcePath = '') {
   let text = String(value ?? '')
   const html = /\.(?:html?|xhtml)(?:$|[?!/])/iu.test(sourcePath)
     || /<!doctype html|<html[\s>]|<body[\s>]/iu.test(text.slice(0, 2000))
+    // WeKnora 可能把嵌入 .md 的 HTML 按任意位置切块；单块没有 <html>/<body>。
+    || /<\s*\/?\s*(?:div|span|p|section|article|h[1-6]|li|a|table|tr|td|th|br|strong|em)\b[^>]*>/iu.test(text.slice(0, 4000))
   if (html || /<(?:style|script|svg|pre|code)\b/iu.test(text)) {
     text = decodeEntities(text)
       .replace(/<!--[\s\S]*?-->/gu, ' ')

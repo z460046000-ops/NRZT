@@ -5,7 +5,7 @@ import { assessMaterials, composeSections, outlineFromMaterials } from './conten
 import { editOutline, formatOutline, savePending, sectionsFromOutline, suggestOutline } from './outline.js'
 import { hybridSearchKnowledge, listKnowledge, listKnowledgeBases, listProjectKnowledgeBases, listProjects, resolvePlatformConfig } from './platform.js'
 import { salesRequest } from './sales.js'
-import { balanceRetrievalResults, platformQueries, retrievalCoverageText } from './retrieval.js'
+import { balanceRetrievalResults, platformQueries, readableSearchResult, retrievalCoverageText } from './retrieval.js'
 
 const TRIGGER = '售前解决方案'
 const PATH_FIELD = /(?:材料(?:路径)?|path)\s*[:：=]\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s，,。；;]+))/iu
@@ -206,17 +206,10 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
     for (let index = 0; index < topics.length; index++) {
       topicResults.push({ topic: topics[index], results: resultSets[index] })
       queryLog.push({ topic: topics[index].key, label: topics[index].label, attempt: 1, query: topics[index].query,
-        hitCount: resultSets[index].filter(result => {
-          const knowledgeId = String(result.knowledge_id ?? result.knowledgeId ?? '').trim()
-          return String(result.id ?? result.chunk_id ?? '').trim() && String(result.content ?? result.matched_content ?? '').trim()
-            && documentById.has(knowledgeId)
-        }).length })
+        hitCount: resultSets[index].filter(result => readableSearchResult(result, documentById)).length,
+        rawHitCount: resultSets[index].length })
     }
-    const missingTopics = topicResults.filter(({ topic, results }) => !results.some(result => {
-      const knowledgeId = String(result.knowledge_id ?? result.knowledgeId ?? '').trim()
-      return String(result.id ?? result.chunk_id ?? '').trim() && String(result.content ?? result.matched_content ?? '').trim()
-        && documentById.has(knowledgeId)
-    }))
+    const missingTopics = topicResults.filter(({ results }) => !results.some(result => readableSearchResult(result, documentById)))
     const retrySets = await Promise.all(missingTopics.map(({ topic }) => hybridSearchKnowledge(cfg, kb.id, {
       query_text: topic.retryQuery,
       match_count: 6,
@@ -228,11 +221,8 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
       const result = topicResults.find(item => item.topic.key === topic.key)
       result.results = [...result.results, ...retrySets[index]]
       queryLog.push({ topic: topic.key, label: topic.label, attempt: 2, query: topic.retryQuery,
-        hitCount: retrySets[index].filter(row => {
-          const knowledgeId = String(row.knowledge_id ?? row.knowledgeId ?? '').trim()
-          return String(row.id ?? row.chunk_id ?? '').trim() && String(row.content ?? row.matched_content ?? '').trim()
-            && documentById.has(knowledgeId)
-        }).length })
+        hitCount: retrySets[index].filter(row => readableSearchResult(row, documentById)).length,
+        rawHitCount: retrySets[index].length })
     }
   } catch (err) {
     if (signal.aborted) throw err

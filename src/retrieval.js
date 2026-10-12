@@ -1,4 +1,5 @@
 /** 售前知识库检索主题与结果覆盖策略。 */
+import { cleanMaterialText, isReadableProse } from './source-quality.js'
 
 export function platformQueries(product) {
   const subject = String(product || '产品').trim().slice(0, 80)
@@ -10,12 +11,20 @@ export function platformQueries(product) {
   ]
 }
 
-function cleanChunk(result, topic, documentById) {
+/** 检索命中须同时属于已授权文档，且清洗后仍有可引用的正文。 */
+export function readableSearchResult(result, documentById) {
   const chunkId = String(result.id ?? result.chunk_id ?? '').trim()
   const knowledgeId = String(result.knowledge_id ?? result.knowledgeId ?? '').trim()
-  const content = String(result.content ?? result.matched_content ?? '').trim()
-  if (!chunkId || !knowledgeId || !content || !documentById.has(knowledgeId)) return undefined
-  return { ...result, id: chunkId, knowledge_id: knowledgeId, content, topics: [topic.key], topicLabels: [topic.label] }
+  const doc = documentById.get(knowledgeId)
+  if (!chunkId || !doc) return undefined
+  const content = cleanMaterialText(result.content ?? result.matched_content ?? '', doc.title)
+  if (!isReadableProse(content)) return undefined
+  return { ...result, id: chunkId, knowledge_id: knowledgeId, content }
+}
+
+function cleanChunk(result, topic, documentById) {
+  const readable = readableSearchResult(result, documentById)
+  return readable ? { ...readable, topics: [topic.key], topicLabels: [topic.label] } : undefined
 }
 
 /** 归并重复 chunk、按主题保底，并用剩余名额补充整体高分结果。 */

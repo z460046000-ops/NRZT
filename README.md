@@ -2,7 +2,7 @@
 
 `@wlyd/dsh-presales-solution` 是运行在 DeepSeek Harness（DSH）中的售前内容生成插件。它把企业资料、项目知识和可核对的公开背景整理为**面向客户的解决方案初稿**，并输出可编辑的 HTML 幻灯片、Markdown、Word 和结构化 JSON。目标不是机械复述资料，而是围绕“背景 → 客户挑战 → 对应做法 → 业务价值 → 适用边界”，按证据组织企业增长或协同等售前叙事。
 
-本文对应 **0.9.8** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
+本文对应 **0.9.9** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
 
 ## 运行模型
 
@@ -65,15 +65,15 @@ HTML 负责图形表达；Markdown 和 Word 把同一图表数据输出为可审
 
 ## 安装与配置
 
-前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.9.4.tgz` 放到本机，执行：
+前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.9.9.tgz` 放到本机，执行：
 
 ```sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.8.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.9.tgz"
 dsh plugin --profile web list
 dsh web
 ```
 
-若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.8`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
+若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.9`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
 
 内容中台由 **运行 DSH 的服务端**配置：
 
@@ -137,7 +137,7 @@ HTML 设计规则见 `guides/slide-design.md` 和随包 Skill `skills/wlyd-presa
 | --- | --- |
 | 没有 `/presales` | 是否安装到 `web` profile、列表有无插件、Web 是否重启；空白会话先用普通文字触发 |
 | 知识库不可读或上传失败 | 平台账号、租户、项目绑定、文档解析状态和当前账号权限；服务端授权不能靠插件绕过 |
-| 方案为空或大多是待确认 | 当前模型是否可用，材料是否有可读正文；若提示模型调用失败，检查自建路由的 `reasoningEfforts` 与 `compat.thinkingFormat`。全占位会阻断交付；部分缺章会在对话中提示补充或公开检索 |
+| 方案为空或大多是待确认 | 当前模型是否可用，材料是否有可读正文；若提示模型调用失败，检查自建路由的 `reasoningEfforts` 与 `compat.thinkingFormat`。0.9.9 会先清洗混合检索片段中的 HTML，再按可引用正文计算命中；纯样式片段不占名额。全占位会阻断交付；部分缺章会在对话中提示补充或公开检索 |
 | HTML / 下载链接返回 401 | 在同一浏览器完成 DSH Web 认证，并确认 Web 进程仍运行 |
 | `awaiting_knowledge_api` | 方案已保存，知识审核接口尚未配置或尚未完成提交 |
 | `Cannot read properties of undefined (reading 'prepare')` | DSH 宿主工具运行时需包含 `packages/core/tools/src/index.ts` 的调度器标识修复；只重装插件无效 |

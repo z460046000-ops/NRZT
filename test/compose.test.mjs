@@ -51,6 +51,27 @@ test('确认大纲后只接受有原文依据且属于该章来源的段落', as
   assert.equal(JSON.stringify(sections).includes('80%'), false)
 })
 
+test('长 chunk 路径用 sourceId 引用，引用原文仍逐字校验', async () => {
+  const sourcePath = '内容中台/很长的产品资料.md · 第 143 段 [chunk:example]'
+  const quote = '平台支持线索分层与客户触达记录。'
+  const manifest = { files: [{ path: sourcePath, excerpt: quote, kind: 'platform-chunk', topics: ['capability'] }] }
+  const outline = [{ heading: '线索运营', topics: ['capabilities'], sourcePaths: [sourcePath] }]
+  let input
+  const ctx = { llm: { async *stream(options) {
+    input = JSON.parse(options.messages[0].content[0].text)
+    yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '线索运营', blocks: [
+      { type: 'para', text: '您可以分层管理线索，并记录客户触达。', sourceId: 'K1', quote },
+    ] }] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [], { sales: true })
+  assert.equal(input.sources[0].id, 'K1')
+  assert.deepEqual(input.outline[0].sourceIds, ['K1'])
+  assert.equal(sections[0].blocks[0].text, '您可以分层管理线索，并记录客户触达。')
+  assert.deepEqual(sections.generationIssues, [])
+})
+
 test('正文可生成有证据的结构化要点，虚构要点被丢弃', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: '产品提供项目资料库。支持上传文档和按主题检索。' }] }
   const outline = [{ heading: '项目资料管理', topics: ['capabilities'], sourcePaths: ['product.md'] }]

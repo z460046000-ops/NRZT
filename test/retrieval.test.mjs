@@ -38,3 +38,16 @@ test('检索覆盖说明标出没有命中的主题', () => {
   assert.match(text, /企业背景 2 条/u)
   assert.match(text, /未检索到客户问题资料/u)
 })
+
+test('Markdown 中切出的 HTML 片段先提取正文，样式片段不占检索名额', () => {
+  const topicResults = [{ topic: topics[0], results: [
+    chunk('css', 0.99, { content: '<style>.card{display:flex;padding:24px}</style>' }),
+    chunk('html', 0.85, { content: '<div class="card"><h2>客户触达</h2><p>平台支持线索分层与触达记录。</p></div>' }),
+  ] }]
+  const { results, coverage } = balanceRetrievalResults(topicResults, docs)
+  assert.equal(results.length, 1)
+  assert.equal(results[0].id, 'html')
+  assert.match(results[0].content, /线索分层与触达记录/u)
+  assert.doesNotMatch(results[0].content, /<div|display:flex/u)
+  assert.equal(coverage[0].hits, 1)
+})

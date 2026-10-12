@@ -71,6 +71,22 @@ test('候选大纲缺痛点方案章时自动补齐，材料化标题不被模�
   assert.equal(withoutPaired[1].heading, '客户问题与对应方案')
 })
 
+test('平台 chunk 路径抄错时按主题恢复可读证据，普通材料仍不猜路径', () => {
+  const chunkManifest = { files: [
+    { kind: 'platform-chunk', path: '平台/长标题 [chunk:a]', topics: ['background'], excerpt: '企业提供客户触达服务。' },
+    { kind: 'platform-chunk', path: '平台/长标题 [chunk:b]', topics: ['pain', 'capability'], excerpt: '客户触达记录分散，平台可集中管理。' },
+    { kind: 'platform-chunk', path: '平台/长标题 [chunk:c]', topics: ['implementation'], excerpt: '方案可按场景分阶段实施。' },
+  ] }
+  const proposed = suggestOutline(chunkManifest, [], [
+    { heading: '业务背景', topics: ['context'], sourcePaths: ['平台/错误路径'] },
+    { heading: '客户挑战与做法', topics: ['problem_solution'], sourcePaths: ['平台/错误路径'] },
+    { heading: '实施路径', topics: ['implementation'], sourcePaths: ['平台/错误路径'] },
+  ])
+  assert.deepEqual(proposed.map(section => section.sourcePaths), [
+    ['平台/长标题 [chunk:a]'], ['平台/长标题 [chunk:b]'], ['平台/长标题 [chunk:c]'],
+  ])
+})
+
 test('同一会话重建 Agent 后仍能读取待确认大纲，完成后不再待确认', async () => {
   const oldHome = process.env.DSH_HOME
   process.env.DSH_HOME = await mkdtemp(path.join(os.tmpdir(), 'wlyd-outline-state-'))

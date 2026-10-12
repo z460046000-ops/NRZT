@@ -44,6 +44,19 @@ function unique(values) { return [...new Set(values)] }
 function paths(manifest) { return (manifest.files ?? []).filter(file => file.excerpt?.trim()).map(file => file.path) }
 function entry(heading, topics, sourcePaths) { return { id: randomUUID(), heading, topics, sourcePaths: unique(sourcePaths) } }
 
+const CHUNK_TOPICS = {
+  context: ['background'], problem_solution: ['pain', 'capability'],
+  capabilities: ['capability'], architecture: ['capability'], scenarios: ['capability', 'implementation'],
+  implementation: ['implementation'], service: ['implementation'], company: ['background'], boundary: ['implementation'],
+}
+
+function recoveredChunkPaths(manifest, topics) {
+  const keys = new Set(topics.flatMap(topic => CHUNK_TOPICS[topic] ?? []))
+  if (!keys.size) return []
+  return (manifest.files ?? []).filter(file => file.kind === 'platform-chunk' && file.excerpt?.trim()
+    && file.topics?.some(topic => keys.has(topic))).slice(0, 4).map(file => file.path)
+}
+
 /**
  * 模型候选按节抢救:标题是材料归纳的结论,一律保留;无效主题按标题归类,
  * 来源只保留材料里真实存在的路径。有对应关系时痛点—方案章不可缺席,缺了自动补;
@@ -63,6 +76,7 @@ export function suggestOutline(manifest, links = [], candidate) {
       if (topics.length === 0) topics.push(guessTopic(heading))
       const sourcePaths = unique((Array.isArray(item.sourcePaths) ? item.sourcePaths : [])
         .filter(source => available.includes(source)))
+      if (sourcePaths.length === 0) sourcePaths.push(...recoveredChunkPaths(manifest, topics))
       sections.push(entry(heading, topics, sourcePaths))
       seen.add(heading)
     }
