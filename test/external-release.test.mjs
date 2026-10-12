@@ -124,7 +124,40 @@ test('未解决状态、密钥和未经核实的问题阻止外发', async () =>
     const checked = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation })
     assert.ok(checked.issues.some(item => item.id === 'unverified_basis'))
     assert.ok(checked.issues.some(item => item.id === 'secret'))
-    assert.ok(checked.issues.some(item => item.id === 'unresolved'))
+    assert.ok(checked.issues.some(item => item.id === 'internal_term' && item.reviewable && item.location))
+    const acknowledged = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation,
+      acknowledgedIssues: { keys: checked.issues.filter(item => item.reviewable).map(item => item.key), policyDigest: checked.policyDigest } })
+    assert.ok(acknowledged.issues.some(item => item.id === 'secret'))
+  } finally {
+    if (oldHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = oldHome
+  }
+})
+
+test('面客措辞提示包含章节位置，全部核对后可外发并记录本次确认', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wlyd-release-review-'))
+  const oldHome = process.env.DSH_HOME
+  process.env.DSH_HOME = path.join(dir, 'dsh')
+  try {
+    const base = path.join(dir, 'solution')
+    const source = prepareSolution({ title: '客户方案', meta: {}, theme: 'corporate', painSolutionLinks: [],
+      sections: [{ kind: 'implementation', heading: '实施范围', blocks: [
+        { type: 'para', text: '待与贵方确认：先在一个团队试行。修改记录由项目负责人管理。' },
+      ] }] })
+    await writeFile(`${base}.json`, JSON.stringify(source))
+    await registerDocument(base, source.editorId)
+    const checked = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation })
+    assert.equal(checked.issues.length, 2)
+    assert.ok(checked.issues.every(item => item.reviewable && item.location.sectionHeading === '实施范围'))
+    assert.match(checked.issues[0].location.field, /sections\/0\/blocks\/0\/text/u)
+    const released = await publishExternalRelease(source.editorId, { baseRevision: 1, confirmation,
+      acknowledgedIssues: { keys: checked.issues.map(item => item.key), policyDigest: checked.policyDigest } })
+    assert.ok(released.releaseId)
+    const record = JSON.parse(await readFile(`${base}.releases/${released.releaseId}/release-record.json`, 'utf8'))
+    assert.equal(record.reviewedIssues.length, 2)
+    assert.equal(record.sourceRevision, 1)
+    await assert.rejects(publishExternalRelease(source.editorId, { baseRevision: 1, confirmation,
+      acknowledgedIssues: { keys: checked.issues.map(item => item.key), policyDigest: 'stale' } }), { status: 409 })
   } finally {
     if (oldHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = oldHome

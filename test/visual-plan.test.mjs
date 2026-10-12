@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
 import { externalizeSolution } from '../src/external-copy.js'
 import { renderHtml } from '../src/html.js'
@@ -13,31 +10,31 @@ const baseSolution = () => ({ title: 'CallWan 售前方案', theme: 'corporate',
     { type: 'bullets', items: ['整理品牌内容', '编排渠道发布', '承接互动线索'] },
   ] }], painSolutionLinks: [] })
 
-test('新方案轮换视觉方向，显式主题不被改写，状态不记录客户资料', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'wlyd-visual-plan-'))
-  const stateFile = path.join(dir, 'state.json')
-  const results = []
-  for (let index = 0; index < 5; index++) {
-    const solution = baseSolution()
-    await assignVisualDesign(solution, { stateFile })
-    results.push(solution)
-  }
-  assert.deepEqual(results.map(item => item.visualDesign.direction),
-    ['redline', 'paper', 'night', 'signal', 'redline'])
-  assert.deepEqual(results.map(item => item.theme),
-    ['corporate', 'elegant', 'dark', 'corporate', 'corporate'])
-  assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).sequence, 4)
-  assert.doesNotMatch(await readFile(stateFile, 'utf8'), /CallWan|营销/u)
-
+test('整稿风格依据内容选择，同类内容稳定，显式主题优先', async () => {
+  const first = baseSolution()
+  const second = baseSolution()
+  await assignVisualDesign(first)
+  await assignVisualDesign(second)
+  assert.equal(first.visualDesign.direction, 'paper')
+  assert.equal(first.theme, 'elegant')
+  assert.deepEqual(first.visualDesign, second.visualDesign)
+  const medical = baseSolution()
+  medical.title = '医院病历质控方案'
+  await assignVisualDesign(medical)
+  assert.equal(medical.visualDesign.direction, 'signal')
+  const technical = baseSolution()
+  technical.title = '技术架构与算力方案'
+  technical.sections = [{ heading: '系统架构', kind: 'architecture', blocks: [] }]
+  await assignVisualDesign(technical)
+  assert.equal(technical.visualDesign.direction, 'night')
   const fixed = baseSolution()
   fixed.theme = 'dark'
-  await assignVisualDesign(fixed, { stateFile, themeExplicit: true })
+  await assignVisualDesign(fixed, { themeExplicit: true })
   assert.equal(fixed.theme, 'dark')
-  assert.equal(fixed.visualDesign.direction, 'paper')
+  assert.equal(fixed.visualDesign.direction, 'night')
   const before = structuredClone(fixed.visualDesign)
-  await assignVisualDesign(fixed, { stateFile })
+  await assignVisualDesign(fixed)
   assert.deepEqual(fixed.visualDesign, before)
-  assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).sequence, 5)
 })
 
 test('同一源稿重渲染稳定，外部稿继承视觉方向；不同方向呈现不同画面', () => {

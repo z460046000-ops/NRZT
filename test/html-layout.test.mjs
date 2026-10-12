@@ -51,7 +51,7 @@ test('长内容拆页且保留文字，标题层级与视口安全规则存在',
   assert.match(html, /cover-geometry/u)
 })
 
-test('新稿同一份方案按章节内容使用不同浅色调，来源和正文保留', () => {
+test('同一份方案保持统一主题，章节不再各用一种底色，正文和来源保留', () => {
   const solution = { title: '增长方案', theme: 'corporate', meta: {},
     visualDesign: { version: 1, direction: 'redline', seed: 12 }, sections: [
       { kind: 'trends', heading: '市场背景', blocks: [{ type: 'para', text: '背景事实' },
@@ -61,16 +61,28 @@ test('新稿同一份方案按章节内容使用不同浅色调，来源和正�
       { kind: 'implementation', heading: '实施路径', blocks: [{ type: 'para', text: '实施事实' }] },
     ] }
   const html = renderHtml(solution, [])
-  for (const tone of ['amber', 'coral', 'sky', 'sage']) assert.match(html, new RegExp(`class="slide tone-${tone}`))
-  for (const tone of ['amber', 'coral', 'sky', 'sage']) {
-    const css = html.match(new RegExp(`\\.slide\\.tone-${tone}\\{([^}]+)\\}`))?.[1]
-    const token = name => css?.match(new RegExp(`--${name}:(#[\\da-f]{6})`, 'iu'))?.[1]
-    assert.ok(contrastRatio('#142034', token('slide')) >= 4.5, `${tone} 正文对比度不足`)
-    for (const accent of ['red', 'blue-dark']) assert.ok(contrastRatio(token(accent), token('slide')) >= 4.5,
-      `${tone} ${accent} 对比度不足`)
-  }
+  assert.doesNotMatch(html, /tone-(?:amber|coral|sky|sage)/u)
+  assert.match(html, /class="design-redline"/u)
   for (const text of ['背景事实', '背景依据', '对应做法', '能力事实', '实施事实']) assert.match(html, new RegExp(text))
   assert.equal(renderHtml(solution, []), html)
+})
+
+test('五个短步骤保持一页，长流程跨页样式与编号连续', () => {
+  const base = { title: '营销动作', theme: 'elegant', meta: {},
+    visualDesign: { version: 2, direction: 'paper', seed: 9 }, sections: [{ kind: 'implementation',
+      heading: '营销动作与记录集中在同一现场', blocks: [{ type: 'steps',
+        items: ['建词：确定关键词', '产出：形成解释内容', '审核：确认事实与合规', '分发：按渠道发布', '回流：返回内容库'] }] }] }
+  const short = renderHtml(base, [])
+  assert.equal((short.match(/class="flow"/gu) ?? []).length, 1)
+  assert.match(short, /--step-count:5/u)
+  assert.match(short, /<i>05<\/i>/u)
+  const long = structuredClone(base)
+  long.sections[0].blocks[0].items = Array.from({ length: 6 }, (_, i) => `第${i + 1}步：${'处理内容并核对资料。'.repeat(8)}`)
+  const html = renderHtml(long, [])
+  assert.ok((html.match(/layout-process-horizontal"/gu) ?? []).length >= 2)
+  assert.doesNotMatch(html, /class="slide [^"]*layout-process-milestone/u)
+  assert.match(html, /营销动作与记录集中在同一现场（续）/u)
+  assert.match(html, /<i>06<\/i>/u)
 })
 
 test('长段落不走大字主张页，渲染器提供有区别的稳定构图', () => {

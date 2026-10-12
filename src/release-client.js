@@ -4,6 +4,10 @@
   if (!panel) return
   const fields = document.getElementById('release-fields')
   const result = document.getElementById('release-result')
+  let acknowledgedIssues
+  document.getElementById('release-confirm-all').addEventListener('click', () => {
+    fields.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = true })
+  })
   document.getElementById('release-open').addEventListener('click', event => {
     fields.hidden = !fields.hidden
     event.currentTarget.textContent = fields.hidden ? '外发检查' : '收起检查'
@@ -19,6 +23,7 @@
       const response = await fetch('/api/wlyd-presales/release', {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: document.body.dataset.editorId, baseRevision: Number(document.body.dataset.revision),
+          ...(acknowledgedIssues ? { acknowledgedIssues } : {}),
           confirmation: {
             structure: checked('release-structure'), stance: value('release-stance'),
             audience: value('release-audience'), distribution: value('release-distribution'),
@@ -32,15 +37,51 @@
             causalChainPreserved: checked('release-causal-chain'),
           } }),
       })
+      acknowledgedIssues = undefined
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || '外发检查失败')
       if (data.issues?.length) {
         result.replaceChildren()
         const title = document.createElement('strong')
-        title.textContent = '暂不能外发，请处理：'
+        title.textContent = '请核对以下问题：'
         const list = document.createElement('ul')
-        data.issues.forEach(issue => { const li = document.createElement('li'); li.textContent = issue.message; list.append(li) })
+        data.issues.forEach(issue => {
+          const li = document.createElement('li')
+          li.textContent = issue.message
+          if (issue.location) {
+            const detail = document.createElement('p')
+            detail.textContent = `${issue.location.sectionHeading} · ${issue.location.field}：${issue.location.excerpt}`
+            const locate = document.createElement('button')
+            locate.type = 'button'; locate.textContent = '定位文字'
+            locate.addEventListener('click', () => {
+              const slides = [...document.querySelectorAll('.slide')]
+              const target = slides.find(slide => slide.textContent.includes(issue.location.term)
+                && (slide.textContent.includes(issue.location.sectionHeading) || issue.location.sectionHeading === '封面'))
+                ?? slides.find(slide => slide.textContent.includes(issue.location.term))
+              if (!target) return
+              fields.hidden = true
+              document.getElementById('release-open').textContent = '外发检查'
+              window.dispatchEvent(new CustomEvent('presales:go-to-slide', { detail: slides.indexOf(target) + 1 }))
+              document.querySelectorAll('.review-highlight').forEach(item => item.classList.remove('review-highlight'))
+              const text = [...target.querySelectorAll('p,li,h1,h2,h3,span')].find(item => item.textContent.includes(issue.location.term))
+              text?.classList.add('review-highlight')
+            })
+            li.append(detail, locate)
+          }
+          list.append(li)
+        })
         result.append(title, list)
+        const reviewable = data.issues.filter(issue => issue.reviewable)
+        if (reviewable.length) {
+          const approve = document.createElement('button')
+          approve.type = 'button'
+          approve.textContent = '以上措辞提示全部已核对，继续外发'
+          approve.addEventListener('click', () => {
+            acknowledgedIssues = { keys: reviewable.map(issue => issue.key), policyDigest: data.policyDigest }
+            document.getElementById('release-submit').click()
+          })
+          result.append(approve)
+        }
       } else {
         result.replaceChildren()
         const title = document.createElement('strong')

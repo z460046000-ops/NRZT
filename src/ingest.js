@@ -9,6 +9,7 @@ import path from 'node:path'
 import mammoth from 'mammoth'
 import { PDFParse } from 'pdf-parse'
 import JSZip from 'jszip'
+import ExcelJS from 'exceljs'
 import { cleanMaterialText } from './source-quality.js'
 
 const TEXT_EXTS = new Set(['md', 'txt', 'csv', 'json', 'html', 'htm', 'xml', 'yaml', 'yml', 'log'])
@@ -31,7 +32,7 @@ export function classify(name) {
   if (ext === 'docx') return 'docx'
   if (ext === 'pdf') return 'pdf'
   if (ext === 'pptx') return 'pptx'
-  if (ext === 'xlsx' || ext === 'xls' || ext === 'doc' || ext === 'ppt') return 'xlsx'
+  if (ext === 'xlsx') return 'xlsx'
   if (IMAGE_EXTS.has(ext)) return 'image'
   if (ext === 'zip') return 'archive'
   return 'other'
@@ -66,6 +67,36 @@ async function walkFiles(ctx, dirTarget, signal, acc, depth = 0) {
  * @returns {Promise<{text: string, note?: string}>} 提取文本与备注。
  */
 export async function extractBinaryText(kind, buffer) {
+  if (kind === 'xlsx') {
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.load(buffer)
+    const sheets = []
+    let cellCount = 0
+    const textValue = value => {
+      if (value == null) return ''
+      if (value instanceof Date) return value.toISOString().slice(0, 10)
+      if (typeof value !== 'object') return String(value)
+      if (value.richText) return value.richText.map(run => run.text).join('')
+      if (value.formula || value.sharedFormula) return value.result == null ? '（公式结果未缓存）' : textValue(value.result)
+      return String(value.text ?? value.error ?? '')
+    }
+    for (const sheet of workbook.worksheets) {
+      const rows = []
+      if (sheet.rowCount > 10000 || sheet.columnCount > 200) throw new Error('Excel 超过单次读取范围（10000 行 / 200 列），请拆分后上传')
+      sheet.eachRow((row, index) => {
+        const cells = []
+        row.eachCell({ includeEmpty: true }, cell => {
+          if (++cellCount > 200000) throw new Error('Excel 单元格过多，请拆分后上传')
+          let value = textValue(cell.value)
+          if (typeof cell.value === 'number' && cell.numFmt?.includes('%')) value = `${Number((cell.value * 100).toPrecision(12))}%`
+          cells.push(value.replaceAll('|', '\\|').replace(/[\r\n]+/gu, ' / '))
+        })
+        if (cells.some(Boolean)) rows.push(`行 ${index}：${cells.join(' | ')}`)
+      })
+      if (rows.length) sheets.push(`## 工作表：${sheet.name}\n\n${rows.join('\n')}`)
+    }
+    return { text: sheets.join('\n\n'), note: '按工作表与原行号提取单元格内容；公式使用文件内缓存结果' }
+  }
   if (kind === 'docx') {
     const { value } = await mammoth.extractRawText({ buffer })
     return { text: value }
@@ -230,7 +261,7 @@ export async function ingestMaterials(ctx, args, exec) {
         const rel = relOf(file.target)
         const { text, note } = capReadableText(raw, rel, maxChars)
         pushEntry(rel, kind, file.size, text, note)
-      } else if (kind === 'docx' || kind === 'pdf' || kind === 'pptx') {
+      } else if (['docx', 'pdf', 'pptx', 'xlsx'].includes(kind)) {
         const buffer = await readFile(ctx.fs.processPath(file.target))
         const { text } = await extractBinaryText(kind, buffer)
         const rel = relOf(file.target)
@@ -245,7 +276,7 @@ export async function ingestMaterials(ctx, args, exec) {
         for (const item of inner) {
           signal.throwIfAborted()
           const itemKind = classify(item.vpath)
-          if (itemKind === 'docx' || itemKind === 'pdf' || itemKind === 'pptx' || itemKind === 'text') {
+          if (['docx', 'pdf', 'pptx', 'xlsx', 'text'].includes(itemKind)) {
             try {
               let text
               if (itemKind === 'text') {

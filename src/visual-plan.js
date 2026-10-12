@@ -1,8 +1,5 @@
-/** 新方案轮换视觉方向；选择结果写入 JSON，重渲染不再重新抽选。 */
-import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import path from 'node:path'
+/** 先按内容选择整稿统一风格；页面只在该设计语言内变化构图。 */
+import { createHash } from 'node:crypto'
 
 export const VISUAL_DIRECTIONS = Object.freeze([
   { id: 'redline', theme: 'corporate' },
@@ -11,33 +8,28 @@ export const VISUAL_DIRECTIONS = Object.freeze([
   { id: 'signal', theme: 'corporate' },
 ])
 
-const defaultStateFile = () => path.join(process.env.DSH_HOME || path.join(homedir(), '.dsh'),
-  'wlyd-presales-editor', 'visual-sequence.json')
-
-let pending = Promise.resolve()
-
-/** 本机连续生成按方向轮换；不存放客户文字或资料路径。 */
-export function assignVisualDesign(solution, { themeExplicit = false, stateFile = defaultStateFile() } = {}) {
-  if (solution.visualDesign) return Promise.resolve(solution)
-  const run = pending.catch(() => {}).then(async () => {
-    let previous = -1
-    try {
-      const saved = JSON.parse(await readFile(stateFile, 'utf8'))
-      if (Number.isSafeInteger(saved.sequence) && saved.sequence >= 0) previous = saved.sequence
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
-    }
-    const sequence = previous + 1
-    const direction = VISUAL_DIRECTIONS[sequence % VISUAL_DIRECTIONS.length]
-    const folder = path.dirname(stateFile)
-    await mkdir(folder, { recursive: true, mode: 0o700 })
-    const temporary = path.join(folder, `.visual-sequence-${randomUUID()}.json`)
-    await writeFile(temporary, JSON.stringify({ sequence }) + '\n', { flag: 'wx', mode: 0o600 })
-    await rename(temporary, stateFile)
-    solution.visualDesign = { version: 1, direction: direction.id, seed: randomBytes(4).readUInt32BE(0) }
-    if (!themeExplicit) solution.theme = direction.theme
-    return solution
-  })
-  pending = run.catch(() => {})
-  return run
+export async function assignVisualDesign(solution, { themeExplicit = false, reselect = false } = {}) {
+  if (solution.visualDesign && !reselect) return solution
+  const text = [solution.title, solution.subtitle, solution.meta?.product,
+    ...solution.sections.flatMap(section => [section.heading, section.lead,
+      ...section.blocks.filter(block => block.type !== 'quote').flatMap(block => [block.text, ...(block.items ?? [])])])]
+    .filter(value => typeof value === 'string').join('\n')
+  let id = 'redline'
+  let basis = '企业业务方案：清晰网格与克制品牌色'
+  if (/医疗|病历|医院|诊疗|政务|教育|金融|银行|保险/u.test(text)) {
+    id = 'signal'; basis = '专业服务场景：清晰可信的统一蓝色网格'
+  } else if (/营销|增长|品牌|传播|获客|渠道|线索/u.test(text)) {
+    id = 'paper'; basis = '营销沟通场景：统一暖纸编辑式排版'
+  } else if (/算力|技术架构|系统架构|系统集成|研发平台|开发者|数据安全|API/iu.test(text)) {
+    id = 'night'; basis = '技术说明场景：统一深色高对比排版'
+  }
+  if (themeExplicit) {
+    id = { corporate: 'redline', elegant: 'paper', dark: 'night' }[solution.theme] ?? id
+    basis = '用户指定整稿主题'
+  }
+  const direction = VISUAL_DIRECTIONS.find(item => item.id === id)
+  solution.visualDesign = { version: 2, direction: id,
+    seed: createHash('sha256').update(text).digest().readUInt32BE(0), basis }
+  if (!themeExplicit) solution.theme = direction.theme
+  return solution
 }

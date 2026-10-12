@@ -27,6 +27,7 @@ import { isSafeDisplayText } from './source-quality.js'
 import { customerFacingSolution } from './customer-copy.js'
 import { normalizeChart } from './chart.js'
 import { assignVisualDesign } from './visual-plan.js'
+import { isUploadRequest, rememberFiles, recentFiles, startUpload, resumeUpload } from './upload-flow.js'
 
 /** Cordis Loader 身份。 */
 export const name = 'wlyd-presales-solution'
@@ -200,10 +201,10 @@ async function askInComposer(ctx, agent, signal, initial, config) {
     let answer
     try {
       const response = await questions.ask({ agent, signal, questions: [{
-        id: `presales-${stage}-${step}`, header: '售前方案',
+        id: `presales-${stage}-${step}`, header: stage.startsWith('upload-') ? '资料同步' : '售前方案',
         question: stage === 'outline' ? '按这个大纲生成，还是在下方输入修改意见？'
           : stage === 'evidence' ? '资料仍有缺口。请选择下一步，或输入补充信息。'
-            : '请选择要读取的项目或知识库。',
+            : stage.startsWith('upload-') ? '请选择资料要同步到的项目或知识库。' : '请选择要读取的项目或知识库。',
         detail: composerDetail(outcome), options,
       }] })
       answer = response?.answers?.[0]?.custom?.trim() || response?.answers?.[0]?.selected?.[0]
@@ -212,7 +213,8 @@ async function askInComposer(ctx, agent, signal, initial, config) {
       return outcome
     }
     if (!answer) return outcome
-    outcome = await resumePresales(ctx, agent, signal, pending, answer, config)
+    outcome = await (pending.stage.startsWith('upload-') ? resumeUpload(ctx, agent, signal, pending, answer, config)
+      : resumePresales(ctx, agent, signal, pending, answer, config))
     await savePending(agent, outcome.pending)
   }
   return outcome
@@ -428,24 +430,44 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
 }
 
 /** 插件注册体:挂载两个工具。 */
-async function preparePlatformFiles(ctx, exec, filesIn, tool) {
+async function preparePlatformFiles(ctx, exec, filesIn = [], tool, attachmentRefs = []) {
   const signal = exec.signal
   const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
-  if (!Array.isArray(filesIn) || filesIn.length === 0 || filesIn.length > 10) {
+  if (!Array.isArray(filesIn) || !Array.isArray(attachmentRefs)
+    || filesIn.length + attachmentRefs.length === 0 || filesIn.length + attachmentRefs.length > 10) {
     throw bad(tool, 'files 必须包含 1—10 个工作区内材料路径')
   }
   const warnings = []
   const files = []
-  for (const input of filesIn) {
-    if (!nonEmpty(input)) throw bad(tool, 'files 中的路径必须是非空字符串')
-    const name = path.basename(input.trim())
+  const allowedRefs = new Map((attachmentRefs.length ? await recentFiles(exec.agent) : []).map(ref => [ref.attachmentId, ref]))
+  for (const input of [...filesIn, ...attachmentRefs]) {
+    const attachment = typeof input === 'object' && input !== null
+    if (!attachment && !nonEmpty(input)) throw bad(tool, 'files 中的路径必须是非空字符串')
+    const name = path.basename(attachment ? input.name ?? '' : input.trim())
     try {
-      const target = await ctx.fs.resolve(input.trim(), { cwd, signal })
-      const buffer = Buffer.from(await ctx.fs.readBytes(target, signal, 20 * 1024 * 1024))
+      let buffer
+      if (attachment) {
+        const allowed = allowedRefs.get(input.attachmentId)
+        if (!allowed || allowed.name !== input.name || allowed.bytes !== input.bytes) throw new Error('只能同步当前会话用户提供的附件')
+        const store = ctx.get?.('attachments') ?? ctx.attachments
+        if (!store?.readFileStream || !name || !input.attachmentId) throw new Error('当前环境无法读取该对话附件')
+        if (input.bytes > 20 * 1024 * 1024) throw new Error('附件超过 20MB，请拆分后上传')
+        const chunks = []
+        let bytes = 0
+        for await (const chunk of store.readFileStream(input, signal)) {
+          bytes += chunk.length
+          if (bytes > 20 * 1024 * 1024) throw new Error('附件超过 20MB，请拆分后上传')
+          chunks.push(Buffer.from(chunk))
+        }
+        buffer = Buffer.concat(chunks)
+      } else {
+        const target = await ctx.fs.resolve(input.trim(), { cwd, signal })
+        buffer = Buffer.from(await ctx.fs.readBytes(target, signal, 20 * 1024 * 1024))
+      }
       const kind = classify(name)
       let content
       if (kind === 'text') content = buffer.toString('utf8')
-      else if (['docx', 'pdf', 'pptx'].includes(kind)) {
+      else if (['docx', 'pdf', 'pptx', 'xlsx'].includes(kind)) {
         content = (await extractBinaryText(kind, buffer)).text
         warnings.push(`${name}(${kind})已提取为文本上传`)
       } else {
@@ -496,17 +518,21 @@ export function apply(ctx, config) {
   ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next()
     if (decision.kind !== 'enter' || signal.aborted) return decision
-    const userMessage = decision.messages.find(message => message.source.kind === 'user')
+    const userMessage = decision.messages.findLast(message => message.source.kind === 'user')
     if (!userMessage) return decision
     const text = userMessage.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+    const attached = decision.messages.filter(message => message.source.kind === 'user')
+      .flatMap(message => message.content.filter(block => block.type === 'file').map(block => block.attachment))
+    if (attached.length) await rememberFiles(agent, attached)
     if (agent.session?.id !== undefined) routedReplies.delete(String(agent.session.id))
     let pending = pendingDecision.get(agent)
     if (!pending) {
       pending = await loadPending(agent)
       if (pending) pendingDecision.set(agent, pending)
     }
-    if (!mentionsPresales(text) && !awaitingMaterial.has(agent) && !pending) return decision
-    if (pending?.stage === 'draft-gaps' && !mentionsPresales(text)
+    const upload = isUploadRequest(text) || pending?.stage?.startsWith('upload-')
+    if (!upload && !mentionsPresales(text) && !awaitingMaterial.has(agent) && !pending) return decision
+    if (!upload && pending?.stage === 'draft-gaps' && !mentionsPresales(text)
       && !['search', 'note', 'cancel'].includes(directReplyIntent('evidence', text))) return decision
 
     let agentRuns = processed.get(agent)
@@ -517,7 +543,11 @@ export function apply(ctx, config) {
     let run = agentRuns.get(userMessage.id)
     if (!run) {
       const source = materialSource(text)
-      const initial = source?.kind === 'cancel' ? runPresales(ctx, agent, signal, source, config)
+      const initial = upload
+        ? pending?.stage?.startsWith('upload-') && !isUploadRequest(text) && !attached.length
+          ? resumeUpload(ctx, agent, signal, pending, text, config)
+          : startUpload(ctx, agent, signal, text, attached.length ? attached : await recentFiles(agent), config)
+        : source?.kind === 'cancel' ? runPresales(ctx, agent, signal, source, config)
         : pending && !['path', 'auto'].includes(source?.kind) ? resumePresales(ctx, agent, signal, pending, text, config)
           : runPresales(ctx, agent, signal, source, config)
       run = Promise.resolve(initial).then(outcome => askInComposer(ctx, agent, signal, outcome, config))
@@ -562,7 +592,7 @@ export function apply(ctx, config) {
   ctx.tools.register({
     name: 'wlyd_ingest',
     description: '导入并分析售前材料包(产品/公司/部门资料、产品截图、zip 产品包)。'
-      + '接受一个文件或目录路径,自动提取文本(md/txt/csv/json/html、docx、pdf、pptx,zip 内文件同样处理),'
+      + '接受一个文件或目录路径,自动提取文本(md/txt/csv/json/html、docx、pdf、pptx、xlsx,zip 内文件同样处理),'
       + '图片登记为素材;生成 analysis/materials.json(结构化清单)与 analysis/corpus.md(全文语料)。'
       + '生成售前解决方案之前,必须先用它导入材料,再读取 analysis/corpus.md 提炼内容。',
     parameters: {
@@ -718,7 +748,7 @@ export function apply(ctx, config) {
           },
         },
       },
-      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选固定视觉主题；未指定时新方案轮换设计方向与配色' },
+      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选整稿统一主题；未指定时根据业务内容选择一个整体风格' },
       output_base: { type: 'string', description: '输出文件名基底(不含扩展名),默认 solution' },
     },
     output: {
@@ -770,7 +800,7 @@ export function apply(ctx, config) {
     name: 'wlyd_platform_setup',
     description: '在内容中台平台创建方案项目与知识库,并上传材料文本。'
       + 'files 为工作区内材料路径;md/txt/json/csv/xml/yaml 直接上传,'
-      + 'docx/pdf/pptx 自动提取为文本后以 .md 上传(平台只收文本格式),'
+      + 'docx/pdf/pptx/xlsx 自动提取为文本后以 .md 上传(平台只收文本格式),'
       + 'zip/图片跳过并提示改用 wlyd_ingest。上传后等待解析完成并返回就绪汇总。'
       + '需要环境变量 WLYD_PLATFORM_EMAIL/PASSWORD/TENANT_ID(可选 BASE_URL)。',
     parameters: {
@@ -845,7 +875,10 @@ export function apply(ctx, config) {
     parameters: {
       project_id: { type: 'string', required: true, description: '已有方案项目 ID' },
       knowledge_base_id: { type: 'string', required: true, description: '该项目已绑定的知识库 ID' },
-      files: { type: 'array', required: true, items: { type: 'string' }, description: '工作区内文件路径，最多 10 个' },
+      files: { type: 'array', items: { type: 'string' }, description: '工作区内文件路径，与对话附件合计最多 10 个' },
+      attachment_refs: { type: 'array', items: { type: 'object', properties: {
+        attachmentId: { type: 'string' }, name: { type: 'string' }, bytes: { type: 'number' },
+      } }, description: '当前会话用户提供的 DSH 文件附件引用；不能猜造 ID' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: {
@@ -855,18 +888,24 @@ export function apply(ctx, config) {
         } } },
         warnings: { type: 'array', items: { type: 'string' } },
       } },
-      render: (_args, value) => [{ type: 'text', text: `已向项目 ${value.projectId} 的知识库 ${value.kbId} 上传 ${value.uploads.length} 份资料：`
+      render: (_args, value) => [{ type: 'text', text: `项目 ${value.projectId} / 知识库 ${value.kbId} 已接收 ${value.uploads.filter(item => item.status !== 'upload_failed').length}/${value.uploads.length} 份资料：`
         + value.uploads.map(item => `${item.name}=${item.status}`).join('、')
         + (value.warnings.length ? `。提示：${value.warnings.join('；')}` : '') }],
     },
     async execute(args, exec) {
       if (!nonEmpty(args.project_id) || !nonEmpty(args.knowledge_base_id)) throw bad('wlyd_platform_upload', 'project_id 和 knowledge_base_id 必填')
       const cfg = resolvePlatformConfig(config || {})
-      const { files, warnings } = await preparePlatformFiles(ctx, exec, args.files, 'wlyd_platform_upload')
+      const { files, warnings } = await preparePlatformFiles(ctx, exec, args.files, 'wlyd_platform_upload', args.attachment_refs)
       const uploads = []
       for (const file of files) {
-        uploads.push(await uploadProjectFile(cfg, { projectId: args.project_id.trim(), kbId: args.knowledge_base_id.trim(),
-          ...file, signal: exec.signal }))
+        try {
+          uploads.push(await uploadProjectFile(cfg, { projectId: args.project_id.trim(), kbId: args.knowledge_base_id.trim(),
+            ...file, signal: exec.signal }))
+        } catch (error) {
+          if (exec.signal?.aborted) throw error
+          uploads.push({ name: file.name, knowledgeId: '', status: 'upload_failed' })
+          warnings.push(error.message)
+        }
       }
       const deadline = Date.now() + 120_000
       while (Date.now() < deadline && uploads.some(item => ['pending', 'processing'].includes(item.status))) {
@@ -964,7 +1003,7 @@ export function apply(ctx, config) {
       project_id: { type: 'string', required: true, description: '平台项目 ID' },
       document_id: { type: 'string', required: true, description: '平台文档 ID(wlyd_platform_generate 返回)' },
       output_base: { type: 'string', description: '输出文件名基底,默认 platform-solution' },
-      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选固定视觉主题；未指定时轮换设计方向与配色' },
+      theme: { type: 'string', enum: ['corporate', 'dark', 'elegant'], description: '可选整稿统一主题；未指定时按业务内容选择整体风格' },
     },
     output: {
       schema: {

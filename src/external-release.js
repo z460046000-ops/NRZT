@@ -14,7 +14,37 @@ const secret = /(?:api[_-]?key|access[_-]?token|password|secret|密码|密钥)\s
 const internalPath = /(?:\/Users\/|presales-runs\/|materials\/|\.\.\/|[A-Za-z]:\\|\bEV-\d+\b|\b[\w-]+\.(?:md|pdf|docx|pptx)\b)/iu
 const money = /[¥￥]\s*\d|\d+(?:\.\d+)?\s*(?:元|万元|折)/u
 
-const issue = (id, message) => ({ id, message })
+const issue = (id, message, location, reviewable = false) => ({ id, message, reviewable,
+  ...(location ? { location } : {}),
+  key: createHash('sha256').update(JSON.stringify([id, message, location])).digest('hex').slice(0, 20) })
+
+function locatedText(draft) {
+  const fields = []
+  const add = (text, field, sectionIndex, sectionHeading = '封面') => {
+    if (typeof text === 'string' && text.trim()) fields.push({ text, field, sectionIndex, sectionHeading })
+  }
+  add(draft.title, 'title'); add(draft.subtitle, 'subtitle')
+  Object.entries(draft.meta).forEach(([key, value]) => add(value, `meta/${key}`))
+  draft.sections.forEach((section, index) => {
+    const root = `sections/${index}`
+    add(section.heading, `${root}/heading`, index, section.heading)
+    add(section.lead, `${root}/lead`, index, section.heading)
+    section.blocks.forEach((block, b) => {
+      for (const key of ['text', 'caption', 'title', 'unit']) add(block[key], `${root}/blocks/${b}/${key}`, index, section.heading)
+      for (const key of ['items', 'headers', 'rows', 'points']) {
+        (block[key] ?? []).flat().forEach((value, n) => {
+          const text = typeof value === 'object' ? Object.values(value).join(' ') : String(value)
+          add(text, `${root}/blocks/${b}/${key}/${n}`, index, section.heading)
+        })
+      }
+    })
+  })
+  draft.painSolutionLinks.forEach(link => {
+    add(link.pain, `links/${link.id}/pain`, undefined, `问题与做法 ${link.id}`)
+    add(link.solution, `links/${link.id}/solution`, undefined, `问题与做法 ${link.id}`)
+  })
+  return fields
+}
 
 function checkRelease(source, draft, policy, confirmation) {
   const problems = []
@@ -42,9 +72,17 @@ function checkRelease(source, draft, policy, confirmation) {
   if (confirmation?.assetsApproved !== true) problems.push(issue('assets', '请核对客户信息、案例、指标与图片授权'))
 
   const text = visibleExternalText(draft)
-  for (const term of policy.blockedTerms) if (text.includes(term)) problems.push(issue('internal_term', `外部稿仍含内部或未解决标记：${term}`))
-  if (/(?:待与贵方确认|待确认|待核实|草稿|待定|待补充|第\s*\d+\s*轮)/u.test(text)) {
-    problems.push(issue('unresolved', '外部稿仍有待确认、待核实或内部修改状态'))
+  for (const field of locatedText(draft)) {
+    const matches = policy.blockedTerms.filter(term => field.text.includes(term))
+    const unresolved = /(?:待与贵方确认|待确认|待核实|草稿|待定|待补充|第\s*\d+\s*轮)/u.exec(field.text)?.[0]
+    if (unresolved && !matches.some(term => term.includes(unresolved))) matches.push(unresolved)
+    for (const term of matches) {
+      const at = field.text.indexOf(term)
+      const location = { field: field.field, sectionIndex: field.sectionIndex, sectionHeading: field.sectionHeading,
+        term, excerpt: field.text.slice(Math.max(0, at - 28), at + term.length + 44) }
+      problems.push(issue(policy.blockedTerms.includes(term) ? 'internal_term' : 'unresolved',
+        `请核对面客措辞：${term}`, location, true))
+    }
   }
   if (secret.test(text)) problems.push(issue('secret', '检测到可能的密钥或凭证，须从外发内容中移除'))
   if (internalPath.test(text)) problems.push(issue('path', '检测到文件路径、内部来源编号或资料文件名'))
@@ -68,7 +106,7 @@ function checkRelease(source, draft, policy, confirmation) {
     !(['pains', 'solution', 'problem_solution'].includes(section.kind) && draft.painSolutionLinks.length))) {
     problems.push(issue('empty_section', '清理来源后出现空章节，请补充有依据的正文'))
   }
-  return [...new Map(problems.map(item => [`${item.id}:${item.message}`, item])).values()]
+  return [...new Map(problems.map(item => [item.key, item])).values()]
 }
 
 function assetMap(solution, external) {
@@ -101,7 +139,14 @@ export async function publishExternalRelease(id, request) {
   draft.meta.version = typeof confirmation.version === 'string' ? confirmation.version.trim().slice(0, 80) : ''
   draft.meta.date = new Date().toISOString().slice(0, 10)
   const issues = checkRelease(solution, draft, policy, confirmation)
-  if (issues.length) return { issues, policyVersion: policy.version, policyDigest: digest }
+  const acknowledgement = request.acknowledgedIssues
+  if (acknowledgement?.keys?.length && acknowledgement.policyDigest !== digest) {
+    throw new EditorError(409, '外发规则已更新，请重新核对问题列表')
+  }
+  const approvedKeys = new Set(Array.isArray(acknowledgement?.keys) ? acknowledgement.keys : [])
+  const reviewedIssues = issues.filter(item => item.reviewable && approvedKeys.has(item.key))
+  const outstanding = issues.filter(item => !reviewedIssues.includes(item))
+  if (outstanding.length) return { issues: outstanding, policyVersion: policy.version, policyDigest: digest }
 
   const releaseId = randomUUID()
   const folder = `${baseAbs}.releases/${releaseId}`
@@ -134,7 +179,7 @@ export async function publishExternalRelease(id, request) {
     policyVersion: policy.version, policyDigest: digest,
     fileDigests: Object.fromEntries(Object.entries(outputs).map(([ext, data]) =>
       [`solution.${ext}`, createHash('sha256').update(data).digest('hex')])),
-    confirmation,
+    confirmation, reviewedIssues,
   }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
   const prefix = `/wlyd-presales/doc/${id}/releases/${releaseId}`
   return { releaseId, policyVersion: policy.version, policyDigest: digest,

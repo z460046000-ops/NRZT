@@ -101,11 +101,15 @@ function splitBlock(block) {
   if (block.type === 'bullets' || block.type === 'steps') {
     const entries = block.items.flatMap((item, index) => splitText(item, block.type === 'steps' ? 95 : 180)
       .map((text, part) => ({ text, number: index + 1, continued: part > 0 })))
-    const size = block.type === 'steps' ? 4 : 4
+    const size = block.type === 'steps' && entries.length <= 5
+      && entries.every(item => item.text.length <= 78) ? 5 : 4
+    const groups = Math.ceil(entries.length / size)
+    const pageSize = block.type === 'steps' ? Math.ceil(entries.length / groups) : size
     const parts = []
-    for (let i = 0; i < entries.length; i += size) {
-      const group = entries.slice(i, i + size)
-      parts.push({ ...block, items: group.map(item => item.continued ? `${item.text}（续）` : item.text), numbers: group.map(item => item.number) })
+    for (let i = 0; i < entries.length; i += pageSize) {
+      const group = entries.slice(i, i + pageSize)
+      parts.push({ ...block, items: group.map(item => item.continued ? `${item.text}（续）` : item.text), numbers: group.map(item => item.number),
+        ...(block.type === 'steps' ? { flowPaged: groups > 1, flowContinued: i > 0 } : {}) })
     }
     return parts
   }
@@ -189,7 +193,7 @@ function renderBlock(block, assetByName, features, sectionKind = '') {
       }
       return `<blockquote class="editorial-quote${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${esc(block.text)}</blockquote>`
     case 'steps':
-      return `<div class="flow" style="--step-count:${Math.min(block.items.length, 4)};grid-template-columns:repeat(${Math.min(block.items.length, 4)},1fr)">`
+      return `<div class="flow" style="--step-count:${Math.min(block.items.length, 5)};grid-template-columns:repeat(${Math.min(block.items.length, 5)},1fr)">`
         + block.items.map((item, i) => `<div class="step"><i>${String(block.numbers?.[i] ?? i + 1).padStart(2, '0')}</i>${semanticIcon(iconForText(item, 'implementation'), 'step-icon')}<span>${esc(item)}</span></div>`).join('')
         + '</div>'
     case 'table': {
@@ -290,6 +294,7 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
           && (blocks.length === 1 || blocks[1]?.type === 'quote')
           && String(leadText).length <= 92 ? 'statement'
           : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
+  if (family === 'process' && blocks.some(block => block.type === 'steps' && block.flowPaged)) return 'process-horizontal'
   const variants = family === 'chart'
     ? blocks.some(block => block.type === 'chart' && block.chartType === 'line')
       ? ['chart-trend', 'chart-wide'] : ['chart-compare', 'chart-wide'] : ({
@@ -313,7 +318,7 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
   const hasCard = blocks.some(block => block.type === 'bullets' || block.kind === 'cards')
   const preferred = family === 'statement' && notes === 0 ? 'statement-center'
     : family === 'chart' ? blocks.some(block => block.type === 'chart' && block.chartType === 'line') ? 'chart-trend' : 'chart-compare'
-      : family === 'process' && stepCount >= 3 && stepCount <= 4
+      : family === 'process' && stepCount >= 3 && stepCount <= 5
         && blocks.filter(block => block.type === 'steps').every(block => block.items.every(item => String(item).length <= 78)) ? 'process-track'
         : family === 'capability' && bulletItems.length >= 3 && bulletItems.length <= 4
           && bulletItems.every(item => String(item).length <= 90) ? 'capability-map'
@@ -338,7 +343,7 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
     if (item === 'editorial-right') return hasCard || notes > 0
     if (item === 'editorial-led') return paras.length > 0 && String(leadText).length > 110
     if (item === 'process-milestone') return stepCount === 1
-    if (item === 'process-track') return stepCount >= 3 && stepCount <= 4
+    if (item === 'process-track') return stepCount >= 3 && stepCount <= 5
       && blocks.filter(block => block.type === 'steps').every(block => block.items.every(item => String(item).length <= 78))
     if (item === 'capability-map') return ['capabilities', 'scenarios'].includes(section.kind)
       && bulletItems.length >= 3 && bulletItems.length <= 4
@@ -372,9 +377,10 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const visual = types.includes('steps') ? ' process-slide' : types.includes('image') ? ' evidence-slide'
     : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? ' capability-slide' : ''
+  const continuation = blocks.some(block => block.type === 'steps' && block.flowContinued) ? '（续）' : ''
   return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
+  <div class="head"><h2 style="font-size:${headingSize}px">${esc(section.heading + continuation)}</h2>${section.lead ? `<p class="lead">${esc(section.lead)}</p>` : ''}</div>
   <div class="body"${gap}>
 ${body}
   </div>
@@ -439,18 +445,6 @@ function closingSlide(solution, t) {
 </section>`
 }
 
-/** 章节内容决定同一份方案内的浅色阅读节奏；旧稿不额外着色。 */
-function chapterTone(kind, index) {
-  if (['trends', 'context', 'overview'].includes(kind)) return 'amber'
-  if (['pains', 'problem_solution', 'solution'].includes(kind)) return 'coral'
-  if (['capabilities', 'scenarios', 'architecture'].includes(kind)) return 'sky'
-  if (['implementation', 'service'].includes(kind)) return 'sage'
-  return ['amber', 'coral', 'sky', 'sage'][index % 4]
-}
-
-const withTone = (slide, tone) => tone
-  ? slide.replace('<section class="slide ', `<section class="slide tone-${tone} `) : slide
-
 /**
  * 渲染售前解决方案 HTML(集团模板幻灯片风格)。
  * @param {object} solution - normalizeSolution 产物。
@@ -472,8 +466,7 @@ export function renderHtml(solution, assets, options = {}) {
   let contentPages = 0
   const recentLayouts = []
   solution.sections.forEach((section, i) => {
-    const tone = designDirection && solution.theme === 'corporate' ? chapterTone(section.kind, i) : ''
-    slides.push(withTone(dividerSlide(solution, section, i + 1, t), tone))
+    slides.push(dividerSlide(solution, section, i + 1, t))
     if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
       const links = solution.painSolutionLinks.flatMap(paginateLink)
       if (solution.external && section.kind === 'problem_solution') {
@@ -483,11 +476,11 @@ export function renderHtml(solution, assets, options = {}) {
           const next = links[index + 1]
           const pair = short && next && !next.continued && [next.pain, next.solution].every(value => String(value).length <= 90)
           const batch = links.slice(index, index + (pair ? 2 : 1))
-          slides.push(withTone(relationSlide(solution, section, batch, page), tone))
+          slides.push(relationSlide(solution, section, batch, page))
           index += batch.length
         }
       } else for (const [index, link] of links.entries()) {
-        slides.push(withTone(linkedSlide(solution, section, [link], section.kind !== 'pains', index), tone))
+        slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains', index))
       }
       if (section.kind !== 'problem_solution') return
     }
@@ -496,7 +489,7 @@ export function renderHtml(solution, assets, options = {}) {
       const layout = layoutFor(solution, section, pageBlocks, contentPages, recentLayouts)
       recentLayouts.push(layout)
       if (recentLayouts.length > 2) recentLayouts.shift()
-      slides.push(withTone(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout), tone))
+      slides.push(contentSlide(solution, section, i + 1, contentPages, pageBlocks, assetByName, features, layout))
     }
   })
   slides.push(closingSlide(solution, t))
@@ -526,7 +519,7 @@ ${cssFor(t, features)}
 ${slides.join('\n')}
 </main>
 <nav class="deck-controls" aria-label="幻灯片控制"><button type="button" id="prev-slide" aria-label="上一页">上一页</button><span id="slide-count">纵向浏览</span><button type="button" id="next-slide" aria-label="下一页">下一页</button>${preview ? '<button type="button" id="source-toggle">返回内部稿</button>' : solution.external ? '' : `<button type="button" id="source-toggle" aria-pressed="false">${solution.editorId ? '查看外部稿' : '隐藏来源'}</button>`}${solution.editorId ? '<button type="button" id="edit-toggle" class="edit-toggle">编辑方案</button>' : ''}</nav>
-${preview ? `<aside class="release-panel" id="release-panel"><strong>外部稿预览 · 尚未批准外发</strong><p>确认内容、受众和授权后，才能生成可下载的外发文件。规则版本 ${esc(preview.policyVersion)}</p><button type="button" id="release-open">外发检查</button><div id="release-fields" hidden><label>结构已确认 <input id="release-structure" type="checkbox"></label><label>口径 <select id="release-stance"><option value="">请选择</option><option value="verified">已验证事实</option><option value="planned">以规划为主</option><option value="mixed">两者混合</option></select></label><label>目标受众 <input id="release-audience" type="text" placeholder="角色与关注点"></label><label>分发范围 <select id="release-distribution"><option value="">请选择</option><option value="partner">外部合作方</option><option value="public">可公开</option></select></label><label>事实基线已核对 <input id="release-facts" type="checkbox"></label><label>版本 <input id="release-version" type="text" placeholder="例如 V1.0"></label><label>确认人 <input id="release-reviewer" type="text" placeholder="填写姓名，仅留在内部记录"></label><label>客户名称、案例、指标与图片授权已检查 <input id="release-assets" type="checkbox"></label><label>价格、折扣和服务承诺已核对 <input id="release-commercial" type="checkbox"></label><label>强声明已有事实支撑 <input id="release-claims" type="checkbox"></label><fieldset class="release-checklist"><legend>外发前逐项检查</legend><label>无内部残留 <input id="release-no-internal" type="checkbox"></label><label>无未批准内容 <input id="release-approved" type="checkbox"></label><label>规划内容已标状态 <input id="release-planning" type="checkbox"></label><label>商务、责任、风险边界可见 <input id="release-boundaries" type="checkbox"></label><label>无生成痕迹与占位符 <input id="release-no-automation" type="checkbox"></label><label>目录、标题、引用一致 <input id="release-structure-consistent" type="checkbox"></label><label>名称、版本、日期一致 <input id="release-version-consistent" type="checkbox"></label><label>声明强度未升级 <input id="release-strength" type="checkbox"></label><label>问题、方案、价值与必要论证完整 <input id="release-causal-chain" type="checkbox"></label></fieldset><button type="button" id="release-submit">检查并生成外发文件</button><div id="release-result" role="status"></div></div></aside>` : ''}
+${preview ? `<aside class="release-panel" id="release-panel"><strong>外部稿预览 · 尚未批准外发</strong><p>确认内容、受众和授权后，才能生成可下载的外发文件。规则版本 ${esc(preview.policyVersion)}</p><button type="button" id="release-open">外发检查</button><div id="release-fields" hidden><label>结构已确认 <input id="release-structure" type="checkbox"></label><label>口径 <select id="release-stance"><option value="">请选择</option><option value="verified">已验证事实</option><option value="planned">以规划为主</option><option value="mixed">两者混合</option></select></label><label>目标受众 <input id="release-audience" type="text" placeholder="角色与关注点"></label><label>分发范围 <select id="release-distribution"><option value="">请选择</option><option value="partner">外部合作方</option><option value="public">可公开</option></select></label><label>事实基线已核对 <input id="release-facts" type="checkbox"></label><label>版本 <input id="release-version" type="text" placeholder="例如 V1.0"></label><label>确认人 <input id="release-reviewer" type="text" placeholder="填写姓名，仅留在内部记录"></label><label>客户名称、案例、指标与图片授权已检查 <input id="release-assets" type="checkbox"></label><label>价格、折扣和服务承诺已核对 <input id="release-commercial" type="checkbox"></label><label>强声明已有事实支撑 <input id="release-claims" type="checkbox"></label><fieldset class="release-checklist"><legend>外发前逐项检查</legend><label>无内部残留 <input id="release-no-internal" type="checkbox"></label><label>无未批准内容 <input id="release-approved" type="checkbox"></label><label>规划内容已标状态 <input id="release-planning" type="checkbox"></label><label>商务、责任、风险边界可见 <input id="release-boundaries" type="checkbox"></label><label>无生成痕迹与占位符 <input id="release-no-automation" type="checkbox"></label><label>目录、标题、引用一致 <input id="release-structure-consistent" type="checkbox"></label><label>名称、版本、日期一致 <input id="release-version-consistent" type="checkbox"></label><label>声明强度未升级 <input id="release-strength" type="checkbox"></label><label>问题、方案、价值与必要论证完整 <input id="release-causal-chain" type="checkbox"></label></fieldset><button type="button" id="release-confirm-all">勾选全部核对项</button><button type="button" id="release-submit">检查并生成外发文件</button><div id="release-result" role="status"></div></div></aside>` : ''}
 ${solution.editorId ? `<aside id="editor-panel" class="editor-panel" aria-label="编辑方案" hidden>
   <header class="editor-header"><div><strong>编辑方案</strong><span>修改将生成新版本</span></div><button type="button" id="editor-close" aria-label="关闭编辑区">关闭</button></header>
   <div id="editor-status" class="editor-status" role="status">点击“编辑方案”开始</div>
@@ -566,6 +559,7 @@ ${solution.editorId ? '<div id="save-notice" class="save-notice" role="status" h
     history.replaceState(null, '', url);
   };
   if (active > 0) show(active);
+  window.addEventListener('presales:go-to-slide', event => show(Number(event.detail)));
   document.getElementById('prev-slide').addEventListener('click', () => show(active ? active - 1 : 1));
   document.getElementById('next-slide').addEventListener('click', () => show(active ? active + 1 : 1));
 ${sourceToggleScript}
@@ -987,14 +981,7 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .design-signal .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
 .design-signal .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--blue)}
 .design-signal .layout-editorial-band .body>.card{border-left-color:var(--blue)}
-/* 同一份集团配色方案按章节业务语义安排可读的浅色节奏。 */
-.slide.tone-amber{--slide:#fff8ed;--tint:#f6e8d3;--red:#97420e;--blue:#385c82;--blue-dark:#294f77;--line:rgba(77,55,29,.22)}
-.slide.tone-coral{--slide:#fff3f0;--tint:#f9e2de;--red:#a12827;--blue:#365b81;--blue-dark:#294e72;--line:rgba(92,45,45,.2)}
-.slide.tone-sky{--slide:#eef6fc;--tint:#dcecf7;--red:#a2291e;--blue:#225c8b;--blue-dark:#1d4d76;--line:rgba(34,68,96,.2)}
-.slide.tone-sage{--slide:#eef7f2;--tint:#dceee3;--red:#a02c1d;--blue:#2a6172;--blue-dark:#28545f;--line:rgba(33,77,62,.2)}
-.slide[class*="tone-"].divider{background:var(--slide);color:var(--ink);--hero-ink:var(--ink);--hero-muted:var(--ink2)}
-.slide[class*="tone-"].divider .chap{color:var(--red);opacity:1}
-.slide[class*="tone-"].divider-symbol{color:var(--blue-dark);opacity:.3}
+.review-highlight{outline:3px solid var(--red);outline-offset:5px}
 ::selection{background:var(--blue);color:#fff}
 @media print{.cover,.divider,.closing{-webkit-print-color-adjust:exact;print-color-adjust:exact}.release-panel{display:none!important}}`
 }

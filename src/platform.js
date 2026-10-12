@@ -141,20 +141,19 @@ export async function uploadProjectFile(cfg, opts) {
   }
   const endpoint = `/api/v1/solutions/projects/${encodeURIComponent(opts.projectId)}/knowledge-bases/${encodeURIComponent(opts.kbId)}/files`
   const response = await authorizedFetch(cfg, (token, tenantId) => {
-    const boundary = `----wlyd-${Math.random().toString(36).slice(2)}`
-    const disposition = `form-data; name="file"; filename="upload.md"; filename*=UTF-8''${encodeURIComponent(opts.name)}`
-    const part = `--${boundary}\r\nContent-Disposition: ${disposition}\r\nContent-Type: text/markdown\r\n\r\n`
+    const form = new FormData()
+    form.append('file', new Blob([opts.content], { type: 'text/markdown; charset=utf-8' }), opts.name)
     return new Request(cfg.baseUrl + endpoint, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'X-Tenant-ID': tenantId,
-        'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body: Buffer.concat([Buffer.from(part), Buffer.from(opts.content, 'utf8'), Buffer.from(`\r\n--${boundary}--\r\n`)]),
+      headers: { Authorization: `Bearer ${token}`, 'X-Tenant-ID': tenantId }, body: form,
     })
   }, 60000, opts.signal)
   const result = await response.json().catch(() => ({}))
   if (!response.ok || result.success === false || !result.data?.id) {
     const requestId = response.headers.get('x-request-id')
-    throw fail(`上传 ${opts.name} -> HTTP ${response.status}${requestId ? `，请求 ID ${requestId}` : ''}`)
+    const code = typeof result.code === 'string' || typeof result.code === 'number' ? ` (${result.code})` : ''
+    const message = typeof result.message === 'string' ? `：${result.message}` : ''
+    throw fail(`上传 ${opts.name} -> HTTP ${response.status}${code}${message}${requestId ? `，请求 ID ${requestId}` : ''}`)
   }
   return { name: opts.name, knowledgeId: String(result.data.id), status: String(result.data.parse_status ?? 'pending') }
 }
