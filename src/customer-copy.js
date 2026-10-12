@@ -11,8 +11,8 @@ export function customerCopy(value) {
   if (typeof value !== 'string') return value
   if (PLACEHOLDER.test(value.trim())) return ''
   return value
-    .replace(/[，,]?贵方的具体情况待后续沟通确认[。.]?/gu, '')
-    .replace(/[，,]?是否与贵方情况一致[，,]待沟通确认[。.]?/gu, '')
+    .replace(/[，,]?贵方的具体情况待后续沟通确认[。.]?/gu, '。')
+    .replace(/[，,]?是否与贵方情况一致[，,]待沟通确认[。.]?/gu, '。')
     .replace(/待后续沟通确认|待沟通确认|待复核|尚待确认/gu, '')
     .replace(/(?:待与贵方确认[:：])?我们将结合贵方业务场景，进一步确认方案的适用范围与实施方式。/gu,
       '实施范围将结合贵方业务场景在项目启动阶段确认。')

@@ -252,13 +252,21 @@
     } catch (error) { save.disabled = false; message(error.message, 'error') }
   }
 
+  function editTarget(event) {
+    const direct = event.target.closest?.('[data-edit-path]')
+    if (direct) return direct
+    // 多行行内文字的边界框包含留白；点击其唯一所属段落也打开同一字段。
+    const paragraph = event.target.closest?.('p,h1,h2,h3,li,td,em,strong')
+    const marks = paragraph?.querySelectorAll('[data-edit-path]')
+    return marks?.length === 1 ? marks[0] : undefined
+  }
   toggle.addEventListener('click', () => open())
   document.addEventListener('click', event => {
-    const target = event.target.closest?.('[data-edit-path]')
+    const target = editTarget(event)
     if (target) open(target.dataset.editPath)
   })
   document.addEventListener('keydown', event => {
-    const target = event.target.closest?.('[data-edit-path]')
+    const target = editTarget(event)
     if (target && ['Enter', ' '].includes(event.key)) { event.preventDefault(); open(target.dataset.editPath) }
   })
   fact.addEventListener('change', () => { knowledgeFields.hidden = !fact.checked; noteError.hidden = true })
