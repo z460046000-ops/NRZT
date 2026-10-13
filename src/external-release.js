@@ -105,6 +105,13 @@ function checkRelease(source, draft, policy, confirmation) {
       excerpt: item.value?.slice(0, 120) || '尚无实质内容', term: '',
     }, true))
   }
+  source.sections.forEach((section, sectionIndex) => section.blocks.forEach((block, blockIndex) => {
+    if (block.type !== 'image' || !block.visualSuggestion || block.path) return
+    problems.push(issue('visual_suggestion', '配图位置尚未放入真实素材；确认后可省略该图外发', {
+      field: `sections/${sectionIndex}/blocks/${blockIndex}/image`, sectionIndex,
+      sectionHeading: section.heading, excerpt: block.visualSuggestion.focus, term: '',
+    }, true))
+  }))
   if ((source.painSolutionLinks ?? []).some(link => ['public_unverified', 'user_unverified'].includes(link.painBasis))) {
     problems.push(issue('unverified_basis', '公开资料或用户补充的痛点仍待核实，不能标记为可外发'))
   }

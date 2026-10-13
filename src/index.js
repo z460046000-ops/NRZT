@@ -27,6 +27,7 @@ import { isSafeDisplayText } from './source-quality.js'
 import { customerFacingSolution } from './customer-copy.js'
 import { normalizeChart } from './chart.js'
 import { assignVisualDesign } from './visual-plan.js'
+import { addImageSuggestions, firstReaderWarnings, VOICE_FINGERPRINT_VERSION } from './first-reader.js'
 import { isUploadRequest, rememberFiles, recentFiles, startUpload, resumeUpload } from './upload-flow.js'
 
 /** Cordis Loader 身份。 */
@@ -371,6 +372,12 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
   const baseAbs = path.resolve(cwd, base)
   const assetsDirName = `${path.basename(base)}-assets`
 
+  addImageSuggestions(solution)
+  solution.writingGuideVersion = VOICE_FINGERPRINT_VERSION
+  warnings.push(...firstReaderWarnings(solution))
+  const suggestionCount = solution.sections.flatMap(section => section.blocks)
+    .filter(block => block.type === 'image' && block.visualSuggestion && !block.path).length
+  if (suggestionCount) warnings.push(`内部稿有 ${suggestionCount} 处按正文提出的配图位置；请在编辑器中上传真实图片，外发稿不会携带未替换的占位。`)
   await assignVisualDesign(solution, { themeExplicit })
 
   const markdown = renderMarkdown(solution, assetViews)

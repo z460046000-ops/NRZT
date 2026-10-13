@@ -134,7 +134,13 @@ function pushBlock(children, block, assetByName) {
       break
     case 'image': {
       const asset = assetByName.get(block.path)
-      if (!asset) break
+      if (!asset) {
+        if (block.visualSuggestion && !block.path && !block.external) children.push(new Paragraph({
+          children: [new TextRun({ text: `内部配图位置｜${block.visualSuggestion.label}：${block.visualSuggestion.focus}。${block.visualSuggestion.instruction}`,
+            italics: true, color: '666666', size: 19 })],
+        }))
+        break
+      }
       const run = imageRunFor(asset)
       if (run) {
         children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [run] }))

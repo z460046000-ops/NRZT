@@ -80,7 +80,7 @@ function blockWeight(block) {
     case 'table': return 2 + block.rows.reduce((sum, row) => sum + Math.max(1, row.join('').length / 80), 0)
     case 'metrics': return 4
     case 'chart': return 6.5
-    case 'image': return 6.5
+    case 'image': return block.visualSuggestion && !block.path ? 3.4 : 6.5
     case 'quote': return String(block.text).startsWith('来源：')
       ? Math.min(1.5, 0.9 + String(block.text).length / 360) : 2 + String(block.text).length / 95
     default: return 3
@@ -220,6 +220,11 @@ function renderBlock(block, assetByName, features, sectionKind = '') {
     case 'chart': return renderChart(block, features)
     case 'image': {
       const asset = assetByName.get(block.sourcePath ?? block.path)
+      if (!asset && block.visualSuggestion && !features.source.external) {
+        features.hasImage = true
+        const hint = block.visualSuggestion
+        return `<figure class="visual visual-placeholder"><div class="frame"><div class="visual-placeholder-copy"><span>内部配图位置 · ${esc(hint.label)}</span><strong>${esc(hint.focus)}</strong><p>${esc(hint.instruction)}</p></div></div><em>${reviewText(block.caption ?? '', `blocks/${block.id}/caption`, features.source)}</em></figure>`
+      }
       if (!asset) return ''
       features.hasImage = true
       return `<figure class="visual"><div class="frame"><img src="./${esc(asset.fileName)}" alt="${esc(block.caption ?? '')}"></div>`
@@ -704,6 +709,11 @@ body.editor-open .deck-controls{right:434px}
 .visual .frame{flex:1;min-height:0;border-radius:2px;background:var(--tint);display:flex;align-items:center;justify-content:center;overflow:hidden}
 .visual img{max-width:100%;max-height:100%;object-fit:contain}
 .visual em{margin-top:10px;font-style:normal;font-size:15px;line-height:1.5;color:var(--ink3)}
+.visual-placeholder .frame{justify-content:flex-start;padding:30px 38px;border:1px dashed var(--ink2)}
+.visual-placeholder-copy{max-width:780px;color:var(--ink);overflow-wrap:anywhere}
+.visual-placeholder-copy span{display:block;font-size:15px;font-weight:700;color:var(--ink2)}
+.visual-placeholder-copy strong{display:block;margin-top:16px;font-size:27px;line-height:1.35}
+.visual-placeholder-copy p{margin-top:12px;font-size:17px;line-height:1.52;color:var(--ink2)}
 .toc-slide .head{padding:78px 80px 0}
 .toc-slide .head{max-height:140px}
 .toc-slide .head h2{font-size:40px}
@@ -953,11 +963,11 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--red)}
 .layout-editorial-band .body{display:grid;grid-template-rows:auto minmax(0,1fr);align-content:start;gap:28px}
 .layout-editorial-band .body>.para{font-size:23px;line-height:1.45;font-weight:620;max-width:1070px}
-.layout-editorial-band .body>.card{min-height:0;padding:18px 34px;background:var(--tint);border:0;border-left:5px solid var(--red);overflow:auto}
+.layout-editorial-band .body>.card{min-height:0;padding:18px 34px;background:var(--tint);border:0;border-top:2px solid var(--red);overflow:auto}
 .layout-editorial-band .body>.card .bullets{list-style:none;padding:0}
 .layout-editorial-band .body>.card li{padding:12px 0;font-size:18px;line-height:1.42}
 .layout-editorial-band .body>.card li+li{margin:0;border-top:1px solid var(--line)}
-.layout-editorial-led .body:has(>.para:only-child){display:flex;justify-content:center;border-left:6px solid var(--red);background:var(--tint);margin:0 64px 76px;padding:35px 44px;top:194px;bottom:0}
+.layout-editorial-led .body:has(>.para:only-child){display:flex;justify-content:center;border-top:2px solid var(--red);background:var(--tint);margin:0 64px 76px;padding:35px 44px;top:194px;bottom:0}
 .layout-editorial-led .body:has(>.para:only-child)>.para{font-size:28px;line-height:1.52;max-width:960px}
 .layout-process-track{background:var(--feature-bg);color:var(--feature-ink)}
 .layout-process-track .head h2,.layout-process-track .head .lead,.layout-process-track .footer,.layout-process-track .footer .brand,.layout-process-track .header .tag{color:var(--feature-ink)}

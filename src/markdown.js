@@ -77,6 +77,10 @@ function pushBlock(lines, block, assetByName) {
     case 'image': {
       const asset = assetByName.get(block.path)
       if (asset) lines.push(`![${block.caption ?? ''}](./${asset.fileName})`, '')
+      else if (block.visualSuggestion && !block.path && !block.external) {
+        lines.push(`> 内部配图位置｜${block.visualSuggestion.label}：${block.visualSuggestion.focus}`, '',
+          `> ${block.visualSuggestion.instruction}`, '')
+      }
       break
     }
     case 'quote':
