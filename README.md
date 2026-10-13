@@ -2,12 +2,14 @@
 
 `@wlyd/dsh-presales-solution` 是运行在 DeepSeek Harness（DSH）中的售前内容生成插件。它把企业资料、项目知识和可核对的公开背景整理为**面向客户的解决方案初稿**，并输出可编辑的 HTML 幻灯片、Markdown、Word 和结构化 JSON。目标不是机械复述资料，而是围绕“背景 → 客户挑战 → 对应做法 → 业务价值 → 适用边界”，按证据组织企业增长或协同等售前叙事。
 
-本文对应 **0.9.18** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
+本文对应 **0.9.20** 分发包。内部稿保留来源供编辑与核对；独立外部稿按面客话术预览，完成外发检查后生成 HTML、Markdown、Word 文件。客户现状、能力承诺和对外使用范围仍需业务人员核对。
 
 ## 两部分能力
 
-- **文案**：独立的 `wlyd-presales-copywriting`，抽象 EDU 产品宣传与 Humanizer 方法，实际约束大纲、整稿和补章。开篇交代产品、对象与要解决的问题；营销方案优先覆盖有据的环境与趋势、现状挑战、总体方案、平台能力、实施服务和公司介绍。挑战写出问题名、具体表现与业务影响，再接对应做法；短句不能省掉读者需要的场景和因果。
-- **样式**：`wlyd-presales-html-ppt` 与 HTML 渲染器按内容选择整稿统一风格，通过标题层级、构图、流程和图表体现主次。
+- **文案**：独立的 `wlyd-presales-copywriting`，抽象 EDU 产品宣传与 Humanizer 方法，实际约束大纲、整稿和补章。开篇交代产品、对象与要解决的问题；营销方案优先覆盖有据的环境与趋势、现状挑战、总体方案、平台能力、实施服务和公司介绍。痛点章深入讲问题名、真实工作场景与造成的麻烦；方案章只简要回扣痛点，重点讲对应做法。短句不能省掉读者需要的场景和因果。
+- **样式**：`wlyd-presales-html-ppt`、`wlyd-presales-design-master` 与 HTML 渲染器按内容选择整稿统一风格，通过标题层级、构图、流程和图表体现主次。
+
+话术规则参考用户确认稿的组织方式：目录区分章节与主题，挑战说“问题名、实际表现、造成的麻烦”，场景说“要做的事、做法、客户看得到的结果”。样本里的数字、产品功能和服务承诺只属于原稿，不会转成其他项目的事实。四个衔接环节若在本轮材料中明确出现，HTML 会突出原文关键词；较长单句不再作为整段大字主张。
 
 ### 点击正文校对
 
@@ -96,15 +98,15 @@ XLSX 使用单元格解析器转为 Markdown：保留工作表名、原行号、
 
 ## 安装与配置
 
-前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.9.18.tgz` 放到本机，执行：
+前提：Node.js 22+、可正常启动的 DSH、当前会话可用的模型服务；安装依赖时能访问 npm 软件包源。将 `dist/wlyd-dsh-presales-solution-0.9.20.tgz` 放到本机，执行：
 
 ```sh
-dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.18.tgz"
+dsh plugin --profile web add "/绝对路径/wlyd-dsh-presales-solution-0.9.20.tgz"
 dsh plugin --profile web list
 dsh web
 ```
 
-若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.18`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
+若 Web 已启动，先在该终端用 Ctrl+C 停止，再重新运行 `dsh web`。DSH 仓库开发环境可将上述 `dsh` 换成 `pnpm dsh`。插件通过 `cordis.patch.yml` 注册到 web profile，安装后应在列表中看到 `@wlyd/dsh-presales-solution@0.9.20`。浏览器使用启动终端给出的地址和认证方式；直接把未认证的 `127.0.0.1` 结果链接粘到另一个浏览器，可能得到 401。
 
 内容中台由 **运行 DSH 的服务端**配置：
 
@@ -143,6 +145,8 @@ dsh web
 编辑产品事实时可勾选“提交知识审核”。插件保存变更和来源，并尝试发到配置的审核接口；未配置时状态为 `awaiting_knowledge_api`，**不代表已经入库**。知识事实须确认后再入库，方案措辞修改不会自动覆盖知识。接口约定见 `guides/knowledge-api-contract.md`，历史记录可用 `node bin/submit-knowledge.mjs "/方案所在目录" solution` 重试。
 
 HTML 设计规则见 `guides/slide-design.md` 和随包 Skill `skills/wlyd-presales-html-ppt/SKILL.md`。渲染器按内容选择主张、问题与做法、流程、能力、证据等页型；图标、定性关系图和有据数据图由插件自身生成。设计方法吸收了 `ui-new` 的层级/对比度检查和 `ui-ux-designer` 的设计令牌/阅读路径判断，已转成插件内的页型规则、主题色、控件状态和自动测试，接收方无需另外安装这两个 Skill。主题文字对比度与 44px 翻页控件由测试守护；真实观感、极端长内容和打印效果仍应逐页复核。当前没有可编辑 PPTX 导出；PDF 是浏览器打印能力。
+
+Design Master 的售前适配版位于 `skills/wlyd-presales-design-master/SKILL.md`。插件在 `apply()` 中用 DSH 的 `ctx.skills.register(...)` 注册；模型可在 Skill 目录按需加载。整稿风格和页型选择还由 `src/visual-plan.js`、`src/html.js` 执行，所以生成不依赖模型是否主动点开该 Skill。Skill 注册成功不等于每次对话都主动加载，是否调用须在 DSH 会话轨迹核实。痛点和方案分章时，对照图只在后面的方案章出现。
 
 ## 工具与边界
 

@@ -10,6 +10,7 @@ import {
 } from 'docx'
 import { imageSize } from 'image-size'
 import { painWithBasis } from './pain-basis.js'
+import { relationSectionIndex } from './section-role.js'
 
 const DOCX_IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif'])
 const MAX_IMG_WIDTH = 540
@@ -49,6 +50,7 @@ export async function renderDocx(solution, assets) {
   }
   children.push(new Paragraph({ text: '' }))
 
+  const relationIndex = relationSectionIndex(solution.sections)
   solution.sections.forEach((section, i) => {
     children.push(new Paragraph({
       text: `${i + 1}. ${section.heading}`,
@@ -60,7 +62,7 @@ export async function renderDocx(solution, assets) {
         indent: { left: 240 },
       }))
     }
-    if (section.kind === 'problem_solution' && solution.painSolutionLinks?.length) {
+    if (i === relationIndex && solution.painSolutionLinks?.length) {
       pushBlock(children, solution.external
         ? { type: 'table', headers: ['编号', '客户问题', '对应做法'],
           rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution]) }

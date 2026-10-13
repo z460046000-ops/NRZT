@@ -99,16 +99,18 @@ test('纯占位只保存在校对记录，不能直接确认成完整正文', as
   }
 })
 
-test('文案与样式是独立运行时 Skill，随插件注册', async () => {
+test('文案、幻灯片与 Design Master 适配 Skill 随插件注册', async () => {
   const { apply } = await import('../src/index.js')
   const skills = []
   apply({ on() {}, tools: { register() {} }, inject(names, setup) {
     if (names.includes('skills')) setup({ skills: { register(skill) { skills.push(skill) } } })
   } })
-  assert.deepEqual(skills.map(skill => skill.name), ['wlyd-presales-copywriting', 'wlyd-presales-html-ppt'])
+  assert.deepEqual(skills.map(skill => skill.name), ['wlyd-presales-copywriting', 'wlyd-presales-html-ppt', 'wlyd-presales-design-master'])
   assert.match(skills[0].content, /去.*|机械排比/u)
   assert.match(skills[0].content, /字段级校对/u)
   assert.match(skills[1].content, /设计/u)
+  assert.match(skills[2].content, /痛点页讲深/u)
+  assert.deepEqual(skills[2].invocation, { modelInvocable: true, userInvocable: true })
 })
 
 test('图表数字的人工修改直接关联对应数据表单，原始证据不变', () => {

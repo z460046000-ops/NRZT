@@ -500,10 +500,12 @@ export function apply(ctx, config) {
     for (const [name, description] of [
       ['wlyd-presales-copywriting', '撰写或润色售前方案；按事实、客户视角、短句及去 AI 套话标准表达，校对状态独立保存。'],
       ['wlyd-presales-html-ppt', '设计或复核售前 HTML 幻灯片；按内容选择整稿统一风格，保持层级、分页和图表可读。'],
+      ['wlyd-presales-design-master', '售前方案设计判断：整稿统一风格，痛点深入讲解，方案重点讲做法，并按内容选择层级与页型。'],
     ]) {
       const raw = readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url), 'utf8')
       const content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '')
-      skillCtx.skills.register({ name, description, source: 'runtime', content })
+      skillCtx.skills.register({ name, description, source: 'runtime',
+        invocation: { modelInvocable: true, userInvocable: true }, content })
     }
   })
   const awaitingMaterial = new WeakSet()

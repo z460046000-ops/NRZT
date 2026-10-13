@@ -272,7 +272,7 @@ test('自然语言路由和命令均经插件按导入、方案顺序执行', as
     inject(names, setup) {
       if (names.includes('connection')) return // Headless mock has no Web editing transport.
       if (names.includes('skills')) {
-        setup({ skills: { register(definition) { designSkill = definition } } })
+        setup({ skills: { register(definition) { if (definition.name === 'wlyd-presales-html-ppt') designSkill = definition } } })
         return
       }
       assert.deepEqual(names, ['commands'])

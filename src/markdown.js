@@ -4,6 +4,7 @@
  */
 import { customerFacingSolution } from './customer-copy.js'
 import { painWithBasis } from './pain-basis.js'
+import { relationSectionIndex } from './section-role.js'
 
 /**
  * 渲染售前解决方案 Markdown(可编辑的事实源)。
@@ -25,10 +26,11 @@ export function renderMarkdown(solution, assets) {
     meta.date && `日期:${meta.date}`,
   ].filter(Boolean)
   if (metaParts.length > 0) lines.push(metaParts.join(' · '), '')
+  const relationIndex = relationSectionIndex(solution.sections)
   solution.sections.forEach((section, i) => {
     lines.push(`## ${i + 1}. ${section.heading}`, '')
     if (section.lead) lines.push(`> ${section.lead}`, '')
-    if (section.kind === 'problem_solution' && solution.painSolutionLinks?.length) {
+    if (i === relationIndex && solution.painSolutionLinks?.length) {
       pushBlock(lines, solution.external
         ? { type: 'table', headers: ['编号', '客户问题', '对应做法'],
           rows: solution.painSolutionLinks.map(link => [link.id, painWithBasis(link), link.solution]) }

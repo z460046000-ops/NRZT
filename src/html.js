@@ -6,6 +6,7 @@
  */
 
 import { customerFacingSolution } from './customer-copy.js'
+import { isPainSection, relationSectionIndex } from './section-role.js'
 import { readFileSync } from 'node:fs'
 import { painBasisLabel } from './pain-basis.js'
 import { iconForText, semanticIcon } from './visual-language.js'
@@ -265,12 +266,31 @@ function narrativeParts(value, sectionHeading) {
   return { title: heading.length <= 24 ? heading : '业务变化', detail: text }
 }
 
-function narrativePage(blocks) {
+function narrativePage(blocks, section) {
   const paragraphs = blocks.filter(block => block.type === 'para')
   return paragraphs.length >= 1 && paragraphs.length <= 2
-    && paragraphs.some(block => String(block.text).length >= 65)
+    && paragraphs.some(block => String(block.text).length >= 65
+      || (isPainSection(section) && /^.{2,16}[：:]/u.test(String(block.text)) && String(block.text).length >= 25))
     && blocks.every(block => block.type === 'para'
       || (block.type === 'quote' && block.text.startsWith('来源：')))
+}
+
+/** 只在原文明确列出四个衔接环节时，将长结论拆成可扫描的关系。 */
+function challengeParts(section, blocks) {
+  if (section.kind !== 'problem_solution' || blocks[0]?.type !== 'para'
+    || blocks.length > 2 || blocks[1] && blocks[1].type !== 'quote') return null
+  const text = String(blocks[0].text)
+  const match = text.match(/(?:^|[是为：，])([^，。；：:、]{1,6})、([^，。；：:、]{1,6})、([^，。；：:、]{1,6})和([^，。；：:、]{1,6})四个层面的衔接不足/u)
+  if (!match) return null
+  const impact = text.match(/(?:最终表现为|通常会带来|带来)([^。；]+)/u)?.[1]?.trim()
+  if (!impact || impact.length > 68) return null
+  return { terms: match.slice(1), impact }
+}
+
+function renderChallengeSummary(blocks, parts, assetByName, features, section) {
+  const paragraph = blocks[0]
+  const path = `blocks/${paragraph.id}/text`
+  return `<div class="challenge-summary"><p class="challenge-label">四个衔接环节</p><div class="challenge-terms" role="list">${parts.terms.map(term => `<strong role="listitem">${esc(term)}</strong>`).join('')}</div><p class="challenge-impact"><span>衔接不足带来的影响</span>${reviewText(parts.impact, path, features.source)}</p></div>${blocks[1] ? renderBlock(blocks[1], assetByName, features, section.kind) : ''}`
 }
 
 function renderNarrativeItems(blocks, section, assetByName, features) {
@@ -348,7 +368,8 @@ function dividerSlide(solution, section, no, t) {
 }
 
 function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
-  if (narrativePage(blocks)) return 'narrative'
+  if (challengeParts(section, blocks)) return 'challenge-summary'
+  if (narrativePage(blocks, section)) return 'narrative'
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const leadText = blocks.find(block => block.type === 'para')?.text ?? ''
   const family = types.includes('chart') ? 'chart'
@@ -356,7 +377,7 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
       : types.includes('image') ? 'evidence'
         : blocks.length <= 2 && blocks[0]?.type === 'para'
           && (blocks.length === 1 || blocks[1]?.type === 'quote')
-          && String(leadText).length <= 92 ? 'statement'
+          && String(leadText).length <= 48 ? 'statement'
           : ['capabilities', 'architecture', 'scenarios'].includes(section.kind) && types.includes('bullets') ? 'capability' : 'editorial'
   if (family === 'process' && blocks.some(block => block.type === 'steps' && block.flowPaged)) return 'process-horizontal'
   const variants = family === 'chart'
@@ -426,10 +447,12 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
 
 function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features, layout) {
   const narrative = layout === 'narrative'
-  const statement = blocks.length <= 2 && blocks[0]?.type === 'para'
-    && String(blocks[0].text).length <= 92
+  const challenge = layout === 'challenge-summary' ? challengeParts(section, blocks) : null
+  const statement = !challenge && blocks.length <= 2 && blocks[0]?.type === 'para'
+    && String(blocks[0].text).length <= 48
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
-  const body = narrative ? renderNarrativeItems(blocks, section, assetByName, features) : blocks.map(group => {
+  const body = challenge ? renderChallengeSummary(blocks, challenge, assetByName, features, section)
+    : narrative ? renderNarrativeItems(blocks, section, assetByName, features) : blocks.map(group => {
     if (group.kind === 'cards') {
       return `<div class="grid g${group.cols}">${group.items.map(b => renderCard(b, assetByName, features, section.kind)).join('')}</div>`
     }
@@ -447,7 +470,7 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   const continuation = blocks.some(block => block.type === 'steps' && block.flowContinued) ? '（续）' : ''
   return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2 style="font-size:${narrative ? 40 : headingSize}px">${reviewText(displayHeading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead && !narrative ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
+  <div class="head"><h2 style="font-size:${narrative ? 40 : headingSize}px">${reviewText(displayHeading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead && !narrative && !challenge ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
   <div class="body"${gap}>
 ${body}
   </div>
@@ -534,11 +557,12 @@ export function renderHtml(solution, assets, options = {}) {
   }
   let contentPages = 0
   const recentLayouts = []
+  const relationIndex = relationSectionIndex(solution.sections)
   solution.sections.forEach((section, i) => {
     slides.push(dividerSlide(solution, section, i + 1, t))
-    if (solution.painSolutionLinks?.length && ['pains', 'solution', 'problem_solution'].includes(section.kind)) {
+    if (solution.painSolutionLinks?.length && i === relationIndex) {
       const links = solution.painSolutionLinks.flatMap(paginateLink)
-      if (solution.external && section.kind === 'problem_solution') {
+      if (solution.external) {
         for (let index = 0, page = 0; index < links.length; page++) {
           const first = links[index]
           const short = [first.pain, first.solution].every(value => String(value).length <= 90)
@@ -551,7 +575,6 @@ export function renderHtml(solution, assets, options = {}) {
       } else for (const [index, link] of links.entries()) {
         slides.push(linkedSlide(solution, section, [link], section.kind !== 'pains', index))
       }
-      if (section.kind !== 'problem_solution') return
     }
     for (const pageBlocks of paginateBlocks(section.blocks)) {
       contentPages += 1
@@ -849,6 +872,15 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .layout-narrative .narrative-detail{margin-top:20px;max-width:920px;font-size:18px;line-height:1.56;font-weight:450;color:var(--ink2);text-wrap:pretty;overflow-wrap:anywhere}
 .layout-narrative .source-note{margin-top:24px;border-top:1px solid var(--line)}
 .layout-narrative .source-note p{max-height:60px}
+.layout-challenge-summary .body{display:grid;grid-template-rows:minmax(0,1fr) auto;align-content:center;gap:20px!important;padding-left:64px;padding-right:64px}
+.layout-challenge-summary .challenge-summary{display:flex;flex-direction:column;justify-content:center;min-width:0}
+.layout-challenge-summary .challenge-label{font-size:18px;line-height:1.4;color:var(--ink2)}
+.layout-challenge-summary .challenge-terms{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;margin-top:18px}
+.layout-challenge-summary .challenge-terms strong{display:block;padding:22px 0 26px;border-top:2px solid var(--red);font-size:42px;line-height:1.15;font-weight:760;color:var(--red)}
+.layout-challenge-summary .challenge-impact{display:flex;align-items:baseline;gap:20px;border-top:1px solid var(--line);padding-top:20px;font-size:20px;line-height:1.5;font-weight:560;color:var(--ink)}
+.layout-challenge-summary .challenge-impact span{flex:0 0 220px;font-size:16px;font-weight:550;color:var(--ink2)}
+.layout-challenge-summary .source-note{max-width:none;min-width:0}
+.sources-hidden .layout-challenge-summary .body{grid-template-rows:minmax(0,1fr)}
 .para{max-width:1000px;font-size:21px;line-height:1.58;color:var(--ink);font-weight:480;text-wrap:pretty}
 .source-note{max-width:1030px;padding-top:10px;border-top:1px solid var(--line);color:var(--ink2)}
 .source-note strong{display:block;font-size:12px;font-weight:700;color:var(--ink3)}

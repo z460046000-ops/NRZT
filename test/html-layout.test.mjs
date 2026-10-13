@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { renderHtml } from '../src/html.js'
 import { externalizeSolution } from '../src/external-copy.js'
+import { renderMarkdown } from '../src/markdown.js'
+import { chapterWritingRule } from '../src/writing-rules.js'
 
 function contrastRatio(first, second) {
   const luminance = value => value.match(/[\da-f]{2}/giu)
@@ -128,6 +130,61 @@ test('长叙述提炼短标题和较小正文，来源隐藏后内容仍占满�
   const external = renderHtml(externalizeSolution(solution), [])
   assert.match(external, /class="slide content-slide layout-narrative"/u)
   assert.doesNotMatch(external, /来源：资料\.md/u)
+})
+
+test('四处衔接问题展示为关键词和小字影响，隐藏来源后两侧版心一致', () => {
+  const solution = { title: 'CallWan 售前方案', theme: 'elegant', meta: {}, sections: [{
+    kind: 'problem_solution', heading: '典型结构性挑战：内容断层、发布割裂与线索跟进滞后',
+    lead: '营销获客需要动作之间保持连续。线索、工具、内容和组织四个层面的衔接不足，通常会带来投入增加、响应放缓和复盘困难。',
+    blocks: [
+      { type: 'para', text: '这些问题背后是线索、工具、内容和组织四个层面的衔接不足，最终表现为投入增加、响应放缓和复盘困难。' },
+      { type: 'quote', text: '来源：资料.md\n线索、工具、内容和组织四个层面的衔接不足' },
+    ],
+  }] }
+  const html = renderHtml(solution, [])
+  const page = html.match(/<section class="slide content-slide layout-challenge-summary">[\s\S]*?<\/section>/u)?.[0]
+  assert.ok(page)
+  assert.doesNotMatch(page, /class="lead"|class="para"/u)
+  assert.match(page, /<strong role="listitem">线索<\/strong><strong role="listitem">工具<\/strong><strong role="listitem">内容<\/strong><strong role="listitem">组织<\/strong>/u)
+  assert.match(page, /<p class="challenge-impact"><span>衔接不足带来的影响<\/span>投入增加、响应放缓和复盘困难<\/p>/u)
+  assert.match(page, /class="source-note"/u)
+  assert.match(html, /\.layout-challenge-summary \.body\{[^}]*padding-left:64px;padding-right:64px/u)
+  assert.match(html, /\.sources-hidden \.layout-challenge-summary \.body\{grid-template-rows:minmax\(0,1fr\)\}/u)
+  assert.match(html, /\.layout-challenge-summary \.challenge-terms strong\{[^}]*color:var\(--red\)/u)
+})
+
+test('长于一行的单句不再进入大字主张页', () => {
+  const html = renderHtml({ title: '方案', theme: 'corporate', meta: {}, sections: [{
+    kind: 'overview', heading: '说明', blocks: [
+      { type: 'para', text: '团队需要在同一处查看需求、内容和发布记录，减少反复切换工具的时间，让后续交接能查到上一轮处理结果。' },
+    ],
+  }] }, [])
+  assert.doesNotMatch(html, /class="slide content-slide statement-slide/u)
+})
+
+test('痛点深入讲解，方案章节才放一次对应做法', () => {
+  const solution = { title: '售前方案', theme: 'corporate', meta: {}, sections: [
+    { kind: 'problem_solution', heading: '现状与挑战', lead: '两个常见问题', blocks: [
+      { type: 'para', text: '线索分散：评论和表单的互动记录落在不同位置，销售同事需要分别查看才能知道上次是谁跟进。' },
+      { type: 'para', text: '内容重复：同一产品介绍每次发布都重新整理，版本和适用范围难以核对，容易重复劳动。' },
+    ] },
+    { kind: 'architecture', heading: '总体方案', blocks: [
+      { type: 'para', text: '将互动统一记录，再按负责人分配跟进；内容统一维护版本，供渠道发布时选用。' },
+    ] },
+  ], painSolutionLinks: [{ id: 'P1', pain: '线索分散', solution: '统一记录互动并分配跟进', painBasis: 'explicit',
+    painEvidence: { path: '资料.md', quote: '线索分散' }, solutionEvidence: { path: '资料.md', quote: '统一记录互动' } }] }
+  const html = renderHtml(solution, [])
+  const painStart = html.indexOf('现状与挑战')
+  const answer = html.indexOf('统一记录互动并分配跟进')
+  assert.ok(painStart >= 0 && answer > painStart)
+  assert.equal((html.match(/统一记录互动并分配跟进/gu) ?? []).length, 1)
+  assert.match(html, /<h3>线索分散<\/h3>/u)
+  assert.match(html, /class="narrative-detail"/u)
+  const markdown = renderMarkdown(solution, [])
+  assert.ok(markdown.indexOf('## 2. 总体方案') < markdown.indexOf('| P1 |'))
+  assert.equal((markdown.match(/\| P1 \|/gu) ?? []).length, 1)
+  assert.match(chapterWritingRule({ heading: '现状与挑战', topics: ['problem_solution'] }), /只讲有依据的问题/u)
+  assert.match(chapterWritingRule({ heading: '总体方案', topics: ['architecture'] }), /主要篇幅/u)
 })
 
 test('外部稿将已核对的痛点方案绘成关系图，且不显示内部证据', () => {
