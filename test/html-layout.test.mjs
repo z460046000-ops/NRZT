@@ -103,6 +103,33 @@ test('长段落不走大字主张页，渲染器提供有区别的稳定构图',
   assert.match(html, /editorial-led \.body/u)
 })
 
+test('长叙述提炼短标题和较小正文，来源隐藏后内容仍占满固定版心', () => {
+  const solution = { title: 'CallWan 售前方案', theme: 'elegant', meta: {}, sections: [{
+    kind: 'trends', heading: '增长环境与趋势：营销获客的变化', lead: '这一章说明背景。', blocks: [
+      { type: 'para', text: 'CallWan 所处的获客环境正在整体变化：AI 改变客户发现品牌、内容供给和营销执行的方式。企业需要把内容、渠道、线索与数据连接起来。' },
+      { type: 'quote', text: '来源：资料.md\nAI 改变客户发现品牌、内容供给和营销执行的方式。' },
+      { type: 'para', text: '这些变化还要放在流量竞争与合规治理的背景里看：企业要在新入口被发现，也要让内容与执行满足治理要求。' },
+      { type: 'quote', text: '来源：资料.md\n流量竞争与合规治理' },
+    ],
+  }] }
+  const html = renderHtml(solution, [])
+  const page = html.match(/<section class="slide content-slide layout-narrative">[\s\S]*?<\/section>/u)?.[0]
+  assert.ok(page)
+  assert.equal((page.match(/class="narrative-card"/gu) ?? []).length, 2)
+  assert.match(page, /<h2 style="font-size:40px">增长环境与趋势<\/h2>/u)
+  assert.match(page, /<h3>获客环境正在整体变化<\/h3>/u)
+  assert.match(page, /<h3>流量竞争与合规治理<\/h3>/u)
+  assert.match(page, /class="narrative-detail">AI 改变客户发现品牌/u)
+  assert.equal((page.match(/class="source-note"/gu) ?? []).length, 2)
+  assert.match(html, /\.layout-narrative \.narrative-card h3\{font-size:29px/u)
+  assert.match(html, /\.layout-narrative \.narrative-detail\{margin-top:20px;max-width:920px;font-size:18px/u)
+  assert.match(html, /\.sources-hidden \.layout-editorial-led \.body:has\(>\.source-note\)\{grid-template-columns:minmax\(0,1fr\)\}/u)
+  assert.doesNotMatch(html, /margin:0 64px 76px/u)
+  const external = renderHtml(externalizeSolution(solution), [])
+  assert.match(external, /class="slide content-slide layout-narrative"/u)
+  assert.doesNotMatch(external, /来源：资料\.md/u)
+})
+
 test('外部稿将已核对的痛点方案绘成关系图，且不显示内部证据', () => {
   const solution = { title: '客户增长方案', theme: 'corporate', meta: { product: '示例产品' }, sections: [
     { kind: 'problem_solution', heading: '问题与做法', blocks: [] },

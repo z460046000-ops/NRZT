@@ -3,7 +3,7 @@ import { CUSTOMER_STYLE, chapterWritingRule } from './writing-rules.js'
 import { sectionsFromOutline, suggestOutline } from './outline.js'
 import { salesOutlineCandidate, salesScenario, sourcePriority, technicalHeading } from './sales.js'
 import { normalizeChart } from './chart.js'
-import { cleanMaterialText, isReadableProse } from './source-quality.js'
+import { cleanMaterialText, isReadableProse, isSafeDisplayText } from './source-quality.js'
 import { hasInternalCopy } from './customer-copy.js'
 
 const MAX_SOURCE_CHARS = 24_000
@@ -75,6 +75,23 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
           { sourceText: sources.get(block.path) })
         return [chart]
       } catch { return [] }
+    }
+    if (type === 'metrics') {
+      const items = block.items
+      const quote = block.quote.replace(/\s+/gu, '')
+      if (!Array.isArray(items) || items.length < 1 || items.length > 4
+        || !items.every(item => {
+          const label = String(item?.label ?? '').trim()
+          const value = String(item?.value ?? '').trim()
+          const labelAt = quote.indexOf(label.replace(/\s+/gu, ''))
+          const valueAt = quote.indexOf(value.replace(/\s+/gu, ''))
+          return label.length >= 2 && label.length <= 32 && value.length <= 20
+            && /\d/u.test(value) && isSafeDisplayText(label) && isSafeDisplayText(value)
+            && !/^(?:19|20)\d{2}$/u.test(value) && !hasInternalCopy(label)
+            && labelAt >= 0 && valueAt >= 0 && Math.abs(labelAt - valueAt) <= 24
+        })) return []
+      return [{ type, items: items.map(item => ({ label: item.label.trim(), value: String(item.value).trim() })) },
+        { type: 'quote', text: `来源：${block.path}\n${block.quote.trim()}` }]
     }
     let body
     if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
@@ -190,7 +207,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     budget -= excerpt.length
   }
   const scenario = salesScenario(manifest)
-  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要核对的状态留给系统校对记录，正文不放制作提示。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。开篇先让第一次接触产品的读者知道产品是什么、服务谁、回应什么问题。${scenario === 'growth' ? '参考人工方案的阅读顺序：增长环境与趋势→现状与挑战→总体方案→平台能力→实施与服务→公司介绍；根据材料合并或省略无据内容。环境页说清变化、业务影响和当前方案的关联；挑战页用“问题名：具体表现”组织，再说明发生在什么环节及影响，逐项接到方案做法。示例标签“线索分散、工具割裂、内容负担、协同低效”只有在本轮来源支持时才使用，不能固定四类或照抄示例。' : '按企业协同的背景、场景问题、对应做法与实施边界组织。'}痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的信息不能冒充已核实事实。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"sourceId":"sources 中的 ID","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，sourceId 必须是输入 sources 的 ID，且该来源须属于本章；quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。${CUSTOMER_STYLE}`
+  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要核对的状态留给系统校对记录，正文不放制作提示。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。开篇先让第一次接触产品的读者知道产品是什么、服务谁、回应什么问题。${scenario === 'growth' ? '参考人工方案的阅读顺序：增长环境与趋势→现状与挑战→总体方案→平台能力→实施与服务→公司介绍；根据材料合并或省略无据内容。环境页说清变化、业务影响和当前方案的关联；挑战页用“问题名：具体表现”组织，再说明发生在什么环节及影响，逐项接到方案做法。示例标签“线索分散、工具割裂、内容负担、协同低效”只有在本轮来源支持时才使用，不能固定四类或照抄示例。' : '按企业协同的背景、场景问题、对应做法与实施边界组织。'}痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的信息不能冒充已核实事实。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"sourceId":"sources 中的 ID","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。关键数字可用 metrics{items:[{label,value}]} 做大字卡片，但每个标签和值都须逐字出现在同一段 quote 中，不要从年份、页码或不同口径拼指标。每章尽量写 2—4 个有信息量的块；每块只陈述其引用原文可支持的内容，sourceId 必须是输入 sources 的 ID，且该来源须属于本章；quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。${CUSTOMER_STYLE}`
   const sections = [...fallback]
   try {
     const reply = await askForJson(ctx, agent, signal, system,
@@ -216,7 +233,7 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     const aliases = new Map(relevant.map(source => [source.id, source.path]))
     try {
       const reply = await askForJson(ctx, agent, signal,
-        `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点。${chapterWritingRule(item)}原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
+        `只写售前方案中的「${item.heading}」这一章，面向客户表达，提炼 1—3 个有信息量的段落或要点。${chapterWritingRule(item)}原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line；单个关键数字可用 metrics{items:[{label,value}]}，但标签和值都必须逐字出现在同一段 quote。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
         { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 'draft-section')
       const candidate = reply.value?.section ?? reply.value
       const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)

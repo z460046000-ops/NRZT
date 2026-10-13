@@ -236,6 +236,55 @@ function renderBlock(block, assetByName, features, sectionKind = '') {
   }
 }
 
+/** 长叙述保留原文和证据，只提取已有短语作为阅读入口。 */
+function narrativeParts(value, sectionHeading) {
+  const text = String(value).trim()
+  const colon = text.match(/^([^：:]{4,48})[：:]\s*(.+)$/u)
+  if (colon) {
+    const title = colon[1].trim()
+      .replace(/^.{1,20}所处的/u, '')
+      .replace(/^这些变化还要放在/u, '')
+      .replace(/的背景里看$/u, '')
+      .replace(/^.+?每天在(.+?)里工作$/u, '$1')
+      .replace(/^(.+?)的分工是$/u, '$1分工')
+      .replace(/ 的(统一现场|统一工作现场)$/u, ' $1')
+      .trim()
+    if (title.length >= 4 && title.length <= 24) return { title, detail: colon[2].trim() }
+  }
+  const change = text.match(/从([^，。；]{2,18})升级为([^，。；]{2,18})/u)
+  if (change) {
+    const title = `从${change[1]}到${change[2]}`
+    if (title.length <= 24) return { title, detail: text }
+  }
+  const first = text.split(/[，。；]/u)[0].trim()
+  if (first.length >= 4 && first.length <= 24) {
+    const detail = text.slice(first.length).replace(/^[，。；\s]+/u, '').trim()
+    return { title: first, detail: detail || text }
+  }
+  const heading = String(sectionHeading).split(/[：:]/u)[0].trim()
+  return { title: heading.length <= 24 ? heading : '业务变化', detail: text }
+}
+
+function narrativePage(blocks) {
+  const paragraphs = blocks.filter(block => block.type === 'para')
+  return paragraphs.length >= 1 && paragraphs.length <= 2
+    && paragraphs.some(block => String(block.text).length >= 65)
+    && blocks.every(block => block.type === 'para'
+      || (block.type === 'quote' && block.text.startsWith('来源：')))
+}
+
+function renderNarrativeItems(blocks, section, assetByName, features) {
+  const items = []
+  for (const block of blocks) {
+    if (block.type === 'para') items.push({ paragraph: block, source: null })
+    else if (items.length) items.at(-1).source = block
+  }
+  return items.map(({ paragraph, source }) => {
+    const { title, detail } = narrativeParts(paragraph.text, section.heading)
+    return `<article class="narrative-card"><h3>${esc(title)}</h3><p class="narrative-detail">${reviewText(detail, `blocks/${paragraph.id}/text`, features.source)}</p>${source ? renderBlock(source, assetByName, features, section.kind) : ''}</article>`
+  }).join('\n')
+}
+
 function renderChart(block, features) {
   const max = Math.max(1, ...block.points.map(point => point.value))
   const pending = block.evidenceStatus === 'user_unverified'
@@ -299,6 +348,7 @@ function dividerSlide(solution, section, no, t) {
 }
 
 function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
+  if (narrativePage(blocks)) return 'narrative'
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const leadText = blocks.find(block => block.type === 'para')?.text ?? ''
   const family = types.includes('chart') ? 'chart'
@@ -375,10 +425,11 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
 }
 
 function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features, layout) {
+  const narrative = layout === 'narrative'
   const statement = blocks.length <= 2 && blocks[0]?.type === 'para'
     && String(blocks[0].text).length <= 92
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
-  const body = blocks.map(group => {
+  const body = narrative ? renderNarrativeItems(blocks, section, assetByName, features) : blocks.map(group => {
     if (group.kind === 'cards') {
       return `<div class="grid g${group.cols}">${group.items.map(b => renderCard(b, assetByName, features, section.kind)).join('')}</div>`
     }
@@ -386,7 +437,9 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   }).join('\n')
   const gap = blocks.length > 1 ? ' style="gap:20px"' : ''
   const tag = solution.meta.product ?? solution.title
-  const headingSize = section.heading.length > 42 ? 26 : section.heading.length > 30 ? 30
+  const displayHeading = narrative && section.heading.includes('：')
+    ? section.heading.split('：')[0] : section.heading
+  const headingSize = displayHeading.length > 42 ? 26 : displayHeading.length > 30 ? 30
     : section.heading.length > 20 ? 34 : 40
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
   const visual = types.includes('steps') ? ' process-slide' : types.includes('image') ? ' evidence-slide'
@@ -394,7 +447,7 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   const continuation = blocks.some(block => block.type === 'steps' && block.flowContinued) ? '（续）' : ''
   return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
-  <div class="head"><h2 style="font-size:${headingSize}px">${reviewText(section.heading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
+  <div class="head"><h2 style="font-size:${narrative ? 40 : headingSize}px">${reviewText(displayHeading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead && !narrative ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
   <div class="body"${gap}>
 ${body}
   </div>
@@ -789,6 +842,13 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .statement-slide .para{font-size:35px;line-height:1.46;letter-spacing:-.02em;font-weight:620;text-wrap:pretty}
 .statement-slide .source-note{align-self:center;border-top:2px solid var(--red);padding-top:19px}
 .statement-slide .source-note p{max-height:200px;font-size:15px;line-height:1.58}
+.layout-narrative .body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-content:center;gap:24px;padding-top:8px}
+.layout-narrative .narrative-card{min-width:0;min-height:272px;padding:30px 34px;background:var(--tint);border:1px solid var(--line);border-top:3px solid var(--red);display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+.layout-narrative .narrative-card:only-child{grid-column:1/-1;min-height:300px}
+.layout-narrative .narrative-card h3{font-size:29px;line-height:1.25;font-weight:750;letter-spacing:-.025em;color:var(--ink);text-wrap:balance}
+.layout-narrative .narrative-detail{margin-top:20px;max-width:920px;font-size:18px;line-height:1.56;font-weight:450;color:var(--ink2);text-wrap:pretty;overflow-wrap:anywhere}
+.layout-narrative .source-note{margin-top:24px;border-top:1px solid var(--line)}
+.layout-narrative .source-note p{max-height:60px}
 .para{max-width:1000px;font-size:21px;line-height:1.58;color:var(--ink);font-weight:480;text-wrap:pretty}
 .source-note{max-width:1030px;padding-top:10px;border-top:1px solid var(--line);color:var(--ink2)}
 .source-note strong{display:block;font-size:12px;font-weight:700;color:var(--ink3)}
@@ -856,6 +916,9 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .layout-editorial-led .body>.source-note{grid-column:1 / 5;align-self:start}
 .layout-editorial-led .body>.para:not(:first-child),.layout-editorial-led .body>.card{grid-column:5 / -1}
 .layout-editorial-led .body>.table,.layout-editorial-led .body>.visual,.layout-editorial-led .body>.flow{grid-column:1 / -1}
+.sources-hidden .layout-editorial-right .body:has(>.source-note),.sources-hidden .layout-editorial-led .body:has(>.source-note){grid-template-columns:minmax(0,1fr)}
+.sources-hidden .layout-editorial-right .body>.para,.sources-hidden .layout-editorial-led .body>.para,.sources-hidden .layout-editorial-led .body>.card{grid-column:1/-1;max-width:none}
+.sources-hidden .layout-statement-right .body>.para{grid-column:1;grid-row:auto}
 .layout-evidence-left .body,.layout-evidence-right .body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);align-items:center;gap:36px}
 .layout-evidence-left .body>.visual{grid-column:1;grid-row:1 / span 3}
 .layout-evidence-left .body>.source-note{grid-column:2}
@@ -967,8 +1030,8 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .layout-editorial-band .body>.card .bullets{list-style:none;padding:0}
 .layout-editorial-band .body>.card li{padding:12px 0;font-size:18px;line-height:1.42}
 .layout-editorial-band .body>.card li+li{margin:0;border-top:1px solid var(--line)}
-.layout-editorial-led .body:has(>.para:only-child){display:flex;justify-content:center;border-top:2px solid var(--red);background:var(--tint);margin:0 64px 76px;padding:35px 44px;top:194px;bottom:0}
-.layout-editorial-led .body:has(>.para:only-child)>.para{font-size:28px;line-height:1.52;max-width:960px}
+.layout-editorial-led .body:has(>.para:only-child){display:flex;justify-content:center;border-top:2px solid var(--red);background:var(--tint);padding:28px 64px;top:196px;bottom:72px}
+.layout-editorial-led .body:has(>.para:only-child)>.para{font-size:21px;line-height:1.58;font-weight:480;max-width:none}
 .layout-process-track{background:var(--feature-bg);color:var(--feature-ink)}
 .layout-process-track .head h2,.layout-process-track .head .lead,.layout-process-track .footer,.layout-process-track .footer .brand,.layout-process-track .header .tag{color:var(--feature-ink)}
 .layout-process-track .head::after{background:var(--feature-muted)}

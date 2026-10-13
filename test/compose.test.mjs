@@ -127,6 +127,26 @@ test('正文可生成有证据的结构化要点，虚构要点被丢弃', async
   assert.equal(JSON.stringify(result).includes('九成'), false)
 })
 
+test('关键数字仅在标签和数值紧邻且均来自同一引文时放大', async () => {
+  const quote = '平台提供 16 种内容形态、5 个发布平台。'
+  const manifest = { files: [{ path: 'product.md', excerpt: quote }] }
+  const outline = [{ heading: '内容能力', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const answer = { sections: [{ heading: '内容能力', blocks: [
+    { type: 'metrics', items: [{ label: '内容形态', value: '16' }, { label: '发布平台', value: '5' }], path: 'product.md', quote },
+    { type: 'metrics', items: [{ label: '内容形态', value: '80%' }], path: 'product.md', quote },
+  ] }] }
+  const ctx = { llm: { async *stream() {
+    yield { type: 'text-delta', text: JSON.stringify(answer) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const result = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.deepEqual(result[0].blocks[0], { type: 'metrics', items: [
+    { label: '内容形态', value: '16' }, { label: '发布平台', value: '5' },
+  ] })
+  assert.equal(JSON.stringify(result).includes('80%'), false)
+})
+
 test('模型图表只有数值和标签均来自同一原文才进入方案', async () => {
   const quote = '2024年线索 12 条；2025年线索 20 条。'
   const manifest = { files: [{ path: 'trend.md', excerpt: quote }] }
