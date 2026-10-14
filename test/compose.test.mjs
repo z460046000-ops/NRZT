@@ -360,7 +360,7 @@ test('服务商以 400/1210 拒绝关闭思考参数时，只撤去该参数重�
   assert.match(result[0].blocks[0].text, /统一管理资料/u)
 })
 
-test('章节直接并行生成，最多两路，按大纲顺序归并', async () => {
+test('章节直接并行生成，最多三路，按大纲顺序归并', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: '产品支持按项目管理客户线索。' }] }
   const outline = Array.from({ length: 4 }, (_, index) => ({
     heading: `第${index + 1}章`, topics: ['capabilities'], sourcePaths: ['product.md'],
@@ -381,7 +381,7 @@ test('章节直接并行生成，最多两路，按大纲顺序归并', async ()
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
     new AbortController().signal, manifest, outline, [])
   assert.equal(retried, 4)
-  assert.equal(maximum, 2)
+  assert.equal(maximum, 3)
   assert.equal(sections.filter(section => section.blocks[0].text.includes('按项目查看')).length, 4)
 })
 

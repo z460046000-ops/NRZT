@@ -321,10 +321,10 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
       return { index, section: fallback[index], issue: 'model_error' }
     }
   }
-  // 至多两章同时请求，保持大纲顺序；同批都遇到服务故障时停止后续请求。
+  // 至多三章同时请求，保持大纲顺序；同批都遇到服务故障时停止后续请求。
   const chapters = [...outline.entries()]
-  for (let index = 0; index < chapters.length; index += 2) {
-    const results = await Promise.all(chapters.slice(index, index + 2).map(draftChapter))
+  for (let index = 0; index < chapters.length; index += 3) {
+    const results = await Promise.all(chapters.slice(index, index + 3).map(draftChapter))
     for (const result of results) {
       sections[result.index] = result.section
       if (result.abstained) abstained.add(result.index)

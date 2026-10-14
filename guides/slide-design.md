@@ -84,7 +84,7 @@
 - [SkillHub `ui-new`](https://skillhub.cn/skills/user_865e3592/ui-new)：视觉层级、文字对比度、间距及控件状态的审查方法。
 - [SkillHub `ui-ux-designer`](https://skillhub.cn/skills/user_ad872d55/ui-ux-designer)：设计令牌、用户阅读路径、内容与版式匹配的判断方法。
 
-## 本版可执行设计约束（0.9.27）
+## 本版可执行设计约束（0.9.28）
 
 - 新方案先按产品、受众与内容选择 `paper / signal / night / redline` 的一种整稿方向；方向内从有对比度的配色组取色，并避免与同方向上一份新稿同色。`visualDesign.palette` 写入 JSON，编辑、预览和外发继承，不在同一份稿里轮换。
 - 模型的普通说明块应提供 `label`（类别短语）、`title`（具体短主张）、`text`（两三句说明）及最多三个原文已有的 `emphasis` 重点词。渲染器用小标签、中标题、正常字号正文呈现。痛点先解释工作场景和麻烦，方案只用短标签回扣痛点并展开做法。
