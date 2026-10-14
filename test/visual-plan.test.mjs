@@ -61,3 +61,23 @@ test('同一源稿重渲染稳定，外部稿继承视觉方向；不同方向�
   assert.match(html, /整理品牌内容/u)
   assert.match(renderHtml(next, []), /整理品牌内容/u)
 })
+
+test('封面、目录和章节过渡页只放短句，长引言留在内容页', () => {
+  const solution = baseSolution()
+  solution.subtitle = '这是一段很长的副标题，反复解释产品、场景、能力、交付、团队和未来规划，已经不适合出现在封面上，需要在正文中保留完整说明。'
+  solution.sections[0].heading = '营销能力：从内容准备到线索跟进的完整业务动作与工作说明'
+  solution.sections[0].lead = '这是一段较长的章节引言，完整说明营销工作的资料来源、渠道动作、内容生产、线索流转和具体实施安排，应由内容页承载。'
+  const html = renderHtml(solution, [])
+  const cover = html.match(/<section class="slide cover[\s\S]*?<\/section>/u)?.[0] ?? ''
+  const toc = html.match(/<section class="slide toc-slide[\s\S]*?<\/section>/u)?.[0] ?? ''
+  const divider = html.match(/<section class="slide divider[\s\S]*?<\/section>/u)?.[0] ?? ''
+  assert.doesNotMatch(cover, /这是一段很长的副标题/u)
+  assert.doesNotMatch(toc, /这是一段较长的章节引言/u)
+  assert.doesNotMatch(divider, /这是一段较长的章节引言/u)
+  assert.match(toc, /营销能力/u)
+  assert.doesNotMatch(toc, /完整业务动作/u)
+  assert.doesNotMatch(divider, /完整业务动作/u)
+  assert.match(html, /完整业务动作/u)
+  assert.match(html, /这是一段较长的章节引言/u)
+  assert.equal(solution.sections[0].lead.length > 42, true)
+})

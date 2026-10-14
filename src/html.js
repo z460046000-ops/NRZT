@@ -335,6 +335,19 @@ function renderCard(block, assetByName, features, sectionKind) {
 
 // ── 页面渲染 ──────────────────────────────────────────────────────
 
+/** 导航页只展示完整短句；较长的原文保留在章节正文和可编辑源稿中。 */
+function briefSlideLine(value) {
+  const line = String(value ?? '').trim()
+  return line && !/[\r\n。！？；]/u.test(line) && [...line].length <= 34 ? line : ''
+}
+
+function navigationHeading(value) {
+  const heading = String(value ?? '').trim()
+  const phrase = heading.split(/[：:，,。！？；]/u)[0].trim()
+  const brief = phrase && [...phrase].length <= 30 ? phrase : heading
+  return [...brief].length <= 30 ? brief : `${[...brief].slice(0, 29).join('')}…`
+}
+
 function coverSlide(solution, t) {
   const meta = solution.meta
   const titleSize = solution.title.length > 70 ? 46 : solution.title.length > 35 ? 56 : 68
@@ -345,7 +358,7 @@ function coverSlide(solution, t) {
   <div class="cover-top"><span>${esc(meta.company ?? '')}</span><span>${esc(meta.date ?? '')}</span></div>
   <div class="cover-grid"><div class="cover-main">
     <h1 style="font-size:${titleSize}px">${reviewText(solution.title, 'title', solution)}</h1>
-    ${solution.subtitle ? `<p class="sub">${reviewText(solution.subtitle, 'subtitle', solution)}</p>` : ''}
+    ${briefSlideLine(solution.subtitle) ? `<p class="sub">${reviewText(solution.subtitle, 'subtitle', solution)}</p>` : ''}
   </div><div class="cover-geometry" aria-hidden="true"><span></span><span></span><span></span></div></div>
   <div class="cover-bottom"><span>${esc(meta.product ?? '')}</span><span>${esc([meta.version, meta.contact].filter(Boolean).join(' · '))}</span></div>
 </section>`
@@ -355,19 +368,20 @@ function tocSlide(solution, sections, start) {
   return `<section class="slide toc-slide">
   <div class="head"><h2>目录${start ? ' · 续' : ''}</h2></div>
   <div class="toc">
-    ${sections.map((s, i) => `<div class="toc-item"><span class="no">${String(start + i + 1).padStart(2, '0')}</span><div><strong>${esc(s.heading)}</strong>${s.lead ? `<span>${esc(s.lead)}</span>` : ''}</div></div>`).join('\n    ')}
+    ${sections.map((s, i) => `<div class="toc-item"><span class="no">${String(start + i + 1).padStart(2, '0')}</span><div><strong>${esc(navigationHeading(s.heading))}</strong></div></div>`).join('\n    ')}
   </div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
 </section>`
 }
 
 function dividerSlide(solution, section, no, t) {
-  const headingSize = section.heading.length > 60 ? 30 : section.heading.length > 30 ? 36 : 44
+  const heading = navigationHeading(section.heading)
+  const headingSize = heading.length > 25 ? 36 : 44
   return `<section class="slide divider${no % 2 === 0 ? ' divider-light' : ''}">
   <div class="inner">
     <p class="chap">${String(no).padStart(2, '0')}</p>
-    <h2 style="font-size:${headingSize}px">${reviewText(section.heading, `sections/${section.id}/heading`, solution)}</h2>
-    ${section.lead ? `<p>${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}
+    <h2 style="font-size:${headingSize}px">${reviewText(heading, `sections/${section.id}/heading`, solution)}</h2>
+    ${briefSlideLine(section.lead) ? `<p>${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}
   </div>
   <div class="divider-symbol">${semanticIcon(section.kind)}</div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>

@@ -133,6 +133,16 @@ export async function listProjectKnowledgeBases(cfg, projectId) {
     .filter(item => item.id && item.id !== 'undefined')
 }
 
+/** 只读取平台已确认、按当前用户和项目权限聚合的生成记忆。失败由调用方降级。 */
+export async function recallProjectMemory(cfg, projectId, query, signal) {
+  const endpoint = `/api/v1/solutions/projects/${encodeURIComponent(projectId)}/memory/recall`
+  const response = await request(cfg, 'GET', `${endpoint}?query=${encodeURIComponent(query)}`, undefined, 12000, signal)
+  if (typeof response.data?.block !== 'string') throw fail('项目记忆召回响应异常')
+  return { block: response.data.block,
+    personalCount: Array.isArray(response.data.personal) ? response.data.personal.length : 0,
+    projectCount: Array.isArray(response.data.project) ? response.data.project.length : 0 }
+}
+
 /** 向已绑定的项目知识库上传文本资料；401 仅在服务端明确拒绝时重登一次。 */
 export async function uploadProjectFile(cfg, opts) {
   if (opts.verifyBinding !== false) {

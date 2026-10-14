@@ -35,6 +35,15 @@ test('增长材料覆盖六段售前叙事；趋势和公司来源各自限定',
   assert.ok(outline[2].sourcePaths.every(source => source !== 'public'))
 })
 
+test('低优先级文件名的唯一材料仍支撑有据章节，不误判产品场景', () => {
+  const manifest = { label: '星桥协作台', files: [{ path: 'materials/接口文档.md',
+    excerpt: '星桥协作台面向销售团队。典型问题是客户咨询分散。工作台汇总咨询来源并记录负责人。' }] }
+  assert.equal(salesScenario(manifest), 'collaboration')
+  const outline = salesOutlineCandidate(manifest, '星桥协作台', 'initial')
+  assert.equal(outline.length, 4)
+  assert.ok(outline.every(item => item.sourcePaths.includes('materials/接口文档.md')))
+})
+
 test('模型漏掉已有依据的趋势章时，自动补足主题和来源', async () => {
   const manifest = { files: [
     { path: 'trend.md', excerpt: '增长环境与趋势：流量竞争和营销内容供给发生变化。' },
@@ -221,35 +230,35 @@ test('模型图表只有数值和标签均来自同一原文才进入方案', as
   assert.equal(result[0].blocks[0].points[1].value, 20)
 })
 
-test('整稿输出被截断时按章重试，保留经过逐字引用校验的正文', async () => {
+test('单章输出被截断不拖垮并行的其他章节，也不设置输出上限', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: 'CallWan 提供线索管理与客户触达。支持销售查看线索状态。' }] }
   const outline = [
     { heading: '产品价值', topics: ['capabilities'], sourcePaths: ['product.md'] },
     { heading: '使用场景', topics: ['scenarios'], sourcePaths: ['product.md'] },
   ]
-  let sectionCalls = 0
   const requests = []
   const ctx = { llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } }, async *stream(options) {
     requests.push(options)
-    if (options.system.includes('售前方案撰写员')) {
+    const input = JSON.parse(options.messages[0].content[0].text)
+    if (input.outline[0].heading === '产品价值') {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
       return
     }
-    sectionCalls++
-    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
-      text: 'CallWan 可帮助销售管理线索并查看状态。', sourceId: 'S1', quote: '支持销售查看线索状态' }] }) }
+    yield { type: 'text-delta', text: JSON.stringify({ sections: [{ blocks: [{ type: 'para',
+      text: 'CallWan 可帮助销售管理线索并查看状态。', sourceId: 'K1', quote: '支持销售查看线索状态' }] }] }) }
     yield { type: 'finish', reason: { kind: 'stop' } }
   } } }
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
     new AbortController().signal, manifest, outline, [], { sales: true, stage: 'initial' })
-  assert.equal(sectionCalls, 2)
+  assert.equal(requests.length, 2)
   assert.ok(requests.every(request => !Object.hasOwn(request, 'maxTokens')))
-  assert.ok(requests.slice(1).every(request => request.reasoningEffort === 'off'))
-  assert.equal(sections.every(section => section.blocks[0].text.includes('CallWan 可帮助销售')), true)
+  assert.ok(requests.every(request => request.reasoningEffort === 'off'))
+  assert.match(sections[0].blocks[0].text, /待与贵方确认/u)
+  assert.match(sections[1].blocks[0].text, /CallWan 可帮助销售/u)
   assert.equal(sections.generationIssues.includes('max-tokens'), true)
 })
 
-test('六章长语料整稿调用关闭思考且不设置输出上限', async () => {
+test('六章长语料分章调用关闭思考且不设置输出上限', async () => {
   const source = 'CallWan 支持销售查看线索状态，并把客户触达记录保存在同一项目。'.repeat(120)
   const manifest = { files: [{ path: 'product.md', excerpt: source }] }
   const outline = Array.from({ length: 6 }, (_, index) => ({
@@ -258,11 +267,13 @@ test('六章长语料整稿调用关闭思考且不设置输出上限', async ()
   const calls = []
   const ctx = { llm: { async resolveModelInfo() { return { reasoning: { efforts: [{ id: 'off' }] } } }, async *stream(options) {
     calls.push(options)
+    const input = JSON.parse(options.messages[0].content[0].text)
+    assert.equal(input.outline.length, 1)
     if (options.reasoningEffort !== 'off' || Object.hasOwn(options, 'maxTokens')) {
       yield { type: 'finish', reason: { kind: 'max-tokens' } }
       return
     }
-    yield { type: 'text-delta', text: JSON.stringify({ sections: outline.map(item => ({
+    yield { type: 'text-delta', text: JSON.stringify({ sections: input.outline.map(item => ({
       heading: item.heading, blocks: [{ type: 'para',
         text: '销售可以查看线索状态，跟进客户触达记录。', path: 'product.md',
         quote: 'CallWan 支持销售查看线索状态，并把客户触达记录保存在同一项目。' }],
@@ -271,7 +282,7 @@ test('六章长语料整稿调用关闭思考且不设置输出上限', async ()
   } } }
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'glm-5.3-flash' } },
     new AbortController().signal, manifest, outline, [], { sales: true })
-  assert.equal(calls.length, 1)
+  assert.equal(calls.length, 6)
   assert.equal(sections.filter(section => section.blocks[0]?.text?.includes('查看线索状态')).length, 6)
   assert.deepEqual(sections.generationIssues, [])
 })
@@ -349,7 +360,7 @@ test('服务商以 400/1210 拒绝关闭思考参数时，只撤去该参数重�
   assert.match(result[0].blocks[0].text, /统一管理资料/u)
 })
 
-test('整稿失败后只对缺失章节做最多两路并行补写', async () => {
+test('章节直接并行生成，最多两路，按大纲顺序归并', async () => {
   const manifest = { files: [{ path: 'product.md', excerpt: '产品支持按项目管理客户线索。' }] }
   const outline = Array.from({ length: 4 }, (_, index) => ({
     heading: `第${index + 1}章`, topics: ['capabilities'], sourcePaths: ['product.md'],
@@ -358,17 +369,13 @@ test('整稿失败后只对缺失章节做最多两路并行补写', async () =>
   let maximum = 0
   let retried = 0
   const ctx = { llm: { async *stream(options) {
-    if (options.system.includes('售前方案撰写员')) {
-      yield { type: 'finish', reason: { kind: 'max-tokens' } }
-      return
-    }
     active++
     maximum = Math.max(maximum, active)
     retried++
     await new Promise(resolve => setTimeout(resolve, 8))
     active--
-    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
-      text: '团队可以按项目查看并管理线索。', sourceId: 'S1', quote: '产品支持按项目管理客户线索' }] }) }
+    yield { type: 'text-delta', text: JSON.stringify({ sections: [{ blocks: [{ type: 'para',
+      text: '团队可以按项目查看并管理线索。', sourceId: 'K1', quote: '产品支持按项目管理客户线索' }] }] }) }
     yield { type: 'finish', reason: { kind: 'stop' } }
   } } }
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
@@ -378,20 +385,16 @@ test('整稿失败后只对缺失章节做最多两路并行补写', async () =>
   assert.equal(sections.filter(section => section.blocks[0].text.includes('按项目查看')).length, 4)
 })
 
-test('单章重试能读取长材料靠后的场景依据', async () => {
+test('分章生成能读取长材料靠后的场景依据', async () => {
   const late = '典型场景：销售在项目内查看线索来源，并按负责人完成跟进。'
   const manifest = { files: [{ path: 'CallWan-产品介绍.md', excerpt: `${'增长趋势描述。'.repeat(1700)}\n${late}` }] }
   const outline = [{ heading: '营销场景与落地方式', topics: ['scenarios'], sourcePaths: ['CallWan-产品介绍.md'] }]
   let sawLate = false
   const ctx = { llm: { async *stream(options) {
-    if (options.system.includes('售前方案撰写员')) {
-      yield { type: 'finish', reason: { kind: 'max-tokens' } }
-      return
-    }
     const input = JSON.parse(options.messages[0].content[0].text)
     sawLate = input.sources[0].content.includes(late)
-    yield { type: 'text-delta', text: JSON.stringify({ blocks: [{ type: 'para',
-      text: '销售可以按来源和负责人跟进项目线索。', sourceId: 'S1', quote: late }] }) }
+    yield { type: 'text-delta', text: JSON.stringify({ sections: [{ blocks: [{ type: 'para',
+      text: '销售可以按来源和负责人跟进项目线索。', sourceId: 'K1', quote: late }] }] }) }
     yield { type: 'finish', reason: { kind: 'stop' } }
   } } }
   const result = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },

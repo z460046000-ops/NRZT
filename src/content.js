@@ -286,75 +286,34 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
     issues.push('no_readable_source')
     return withIssues(fallback)
   }
-  let budget = 40_000
-  const limited = []
-  const aliases = new Map()
-  const evidence = new Map()
-  for (const [sourcePath, content] of sources) {
-    if (budget <= 0) break
-    const id = `K${limited.length + 1}`
-    // 均分上下文，避免第一份长材料吃掉全部预算，后续附件完全消失。
-    const quota = Math.max(2000, Math.floor(budget / (sources.size - limited.length)))
-    const excerpt = content.slice(0, Math.min(budget, quota))
-    const anchors = evidenceAnchors(excerpt, id, sourcePath)
-    anchors.forEach(anchor => evidence.set(anchor.id, anchor))
-    limited.push({ id, path: sourcePath, content: excerpt,
-      evidence: anchors.map(({ id, text }) => ({ id, text })) })
-    aliases.set(id, sourcePath)
-    budget -= excerpt.length
-  }
   const scenario = salesScenario(manifest)
   const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要核对的状态留给系统校对记录，正文不放制作提示。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。开篇先让第一次接触产品的读者知道产品是什么、服务谁、回应什么问题。${scenario === 'growth' ? '参考人工方案的阅读顺序：增长环境与趋势→现状与挑战→总体方案→平台能力→实施与服务→公司介绍；根据材料合并或省略无据内容。环境页说清变化、业务影响和当前方案的关联。痛点章深入讲清问题名、工作场景和实际麻烦；后面的方案章只简要回扣痛点，重点讲对应做法、使用者动作和可见结果。示例标签“线索分散、工具割裂、内容负担、协同低效”只有在本轮来源支持时才使用，不能固定四类或照抄示例。' : '按企业协同的背景、场景问题、对应做法与实施边界组织。'}痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的信息不能冒充已核实事实。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","label":"短类别","title":"短主张","text":"50—110字具体说明","emphasis":["正文已有重点词"],"items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"evidenceId":"对应原文锚点 ID（优先）","sourceId":"sources 中的 ID（无锚点时）","quote":"逐字原文片段（无锚点时）"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。关键数字可用 metrics{items:[{label,value}]} 做大字卡片，但每个标签和值都须逐字出现在同一段 quote 中，不要从年份、页码或不同口径拼指标。普通章节尽量写 2—4 个有信息量的块；有依据的痛点章可写 3—5 个块，分别解释具体问题。每块只陈述其引用原文可支持的内容，优先选择对应 evidenceId；无合适锚点时 sourceId 必须是输入 sources 的 ID，且该来源须属于本章，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。${CUSTOMER_STYLE}`
   const sections = [...fallback]
   const abstained = new Set()
-  let wholeModelFailed = false
-  try {
-    const reply = await askForJson(ctx, agent, signal, system,
-      { outline: outline.map(item => ({ heading: item.heading, topics: item.topics,
-        writingTask: chapterWritingRule(item), sourcePaths: item.sourcePaths,
-        sourceIds: (item.sourcePaths ?? []).map(path => [...aliases].find(([, value]) => value === path)?.[0]).filter(Boolean) })),
-      sources: limited, citationRule: '每块优先填写 evidenceId，选择 sources.evidence 中最相关的原文 ID。插件回填精确原文；没有适合锚点时仍可使用 sourceId 加逐字 quote。evidenceId 不能虚构。' }, 'draft-all')
-    if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
-      for (const [index, candidate] of reply.value.sections.entries()) {
-        if (Array.isArray(candidate?.blocks) && candidate.blocks.length === 0) abstained.add(index)
-        sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources, aliases, evidence)
-        if (sections[index] === fallback[index]) {
-          console.warn('[wlyd-presales] rejected-section', JSON.stringify({ stage: 'draft-all',
-            ...rejectedSectionMeta(candidate, sectionEvidencePaths(outline[index], manifest), sources, aliases, evidence) }))
-          issues.push('unverified_content')
-        }
-      }
-    } else {
-      issues.push(reply.issue ?? 'invalid_sections')
-      wholeModelFailed = ['model_error', 'model_timeout', 'provider_bad_request'].includes(reply.issue)
-    }
-  } catch (error) {
-    if (signal?.aborted) throw error
-    console.warn('[wlyd-presales] compose-exception', JSON.stringify({ error: error?.name ?? 'Error' }))
-    issues.push('model_error')
-  }
-  const retryChapter = async ([index, item]) => {
+  const draftChapter = async ([index, item]) => {
     const relevant = [...new Set(sectionEvidencePaths(item, manifest))].filter(sourcePath => sources.has(sourcePath))
-      .slice(0, 4).map((sourcePath, position) => ({ id: `S${position + 1}`,
+      .slice(0, 4).map((sourcePath, position) => ({ id: `K${position + 1}`,
         name: sourcePath.split('/').at(-1), content: sectionSourceExcerpt(sources.get(sourcePath), item), path: sourcePath }))
     if (!relevant.length) return { index, section: fallback[index] }
-    const aliases = new Map(relevant.map(source => [source.id, source.path]))
-    const evidence = new Map()
+    const chapterAliases = new Map(relevant.map(source => [source.id, source.path]))
+    const chapterEvidence = new Map()
     relevant.forEach(source => {
       source.evidence = evidenceAnchors(source.content, source.id, source.path)
-      source.evidence.forEach(anchor => evidence.set(anchor.id, anchor))
+      source.evidence.forEach(anchor => chapterEvidence.set(anchor.id, anchor))
     })
     try {
       const reply = await askForJson(ctx, agent, signal,
-        `只写售前方案中的「${item.heading}」这一章，面向客户表达，普通章提炼 1—3 个有信息量的段落或要点；有足够依据的痛点章可以写 3—5 个问题块。${chapterWritingRule(item)}原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line；单个关键数字可用 metrics{items:[{label,value}]}，但标签和值都必须逐字出现在同一段 quote。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","label":"短类别","title":"短主张","text":"50—110字具体说明","emphasis":["正文已有重点词"],"items":["要点"],"evidenceId":"S1:E1（优先选择对应锚点）","sourceId":"S1（无锚点时）","quote":"对应来源中的连续原文（无锚点时）"}]}。每块优先选择输入中的 evidenceId；无合适锚点时 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
-        { sources: relevant.map(({ id, name, content, evidence }) => ({ id, name, content,
-          evidence: evidence.map(({ id, text }) => ({ id, text })) })),
-          citationRule: '优先填写 evidenceId 选择原文锚点，插件精确回填；没有适合锚点时使用 sourceId 与逐字 quote。' }, 'draft-section')
-      const candidate = reply.value?.section ?? reply.value
+        `${system}\n本次只写「${item.heading}」一章，不生成其他章节。${chapterWritingRule(item)}只输出包含一章的 sections JSON。${settings.memoryBlock ?? ''}`,
+        { outline: [{ heading: item.heading, topics: item.topics, writingTask: chapterWritingRule(item),
+          sourcePaths: relevant.map(source => source.path), sourceIds: relevant.map(source => source.id) }],
+          sources: relevant.map(({ id, name, content, evidence }) => ({ id, name, path: chapterAliases.get(id), content,
+            evidence: evidence.map(({ id, text }) => ({ id, text })) })),
+          citationRule: '优先用 evidenceId 选择原文锚点；没有合适锚点才用 sourceId 和逐字 quote。' }, 'draft-section')
+      const candidate = reply.value?.sections?.[0] ?? reply.value?.section ?? reply.value
       const empty = Array.isArray(candidate?.blocks) && candidate.blocks.length === 0
-      const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases, evidence)
+      const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, chapterAliases, chapterEvidence)
       if (section === fallback[index]) console.warn('[wlyd-presales] rejected-section', JSON.stringify({ stage: 'draft-section',
-        ...rejectedSectionMeta(candidate, sectionEvidencePaths(item, manifest), sources, aliases, evidence) }))
+        ...rejectedSectionMeta(candidate, sectionEvidencePaths(item, manifest), sources, chapterAliases, chapterEvidence) }))
       return { index, section, abstained: empty, issue: section === fallback[index] ? reply.issue ?? 'unverified_content' : undefined }
     } catch (error) {
       if (signal?.aborted) throw error
@@ -362,17 +321,16 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
       return { index, section: fallback[index], issue: 'model_error' }
     }
   }
-  const missingChapters = [...outline.entries()].filter(([index]) => sections[index] === fallback[index])
-  // 整稿遇到模型服务错误时先试一章；仍失败就停止，避免对同一故障重复请求。
-  const batchSize = wholeModelFailed ? 1 : 2
-  for (let index = 0; index < missingChapters.length; index += batchSize) {
-    const results = await Promise.all(missingChapters.slice(index, index + batchSize).map(retryChapter))
+  // 至多两章同时请求，保持大纲顺序；同批都遇到服务故障时停止后续请求。
+  const chapters = [...outline.entries()]
+  for (let index = 0; index < chapters.length; index += 2) {
+    const results = await Promise.all(chapters.slice(index, index + 2).map(draftChapter))
     for (const result of results) {
       sections[result.index] = result.section
       if (result.abstained) abstained.add(result.index)
       if (result.issue) issues.push(result.issue)
     }
-    if (wholeModelFailed && results.every(result =>
+    if (results.every(result =>
       result.section === fallback[result.index]
       && ['model_error', 'model_timeout', 'provider_bad_request'].includes(result.issue))) break
   }

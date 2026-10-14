@@ -29,16 +29,17 @@ export function technicalHeading(heading) {
 export function salesScenario(manifest) {
   const files = [...(manifest.files ?? [])].filter(file => file.kind !== 'public' && file.kind !== 'user')
     .sort((a, b) => sourcePriority(b) - sourcePriority(a))
-  const names = files.slice(0, 3).map(file => file.path.split('/').at(-1)).join(' ')
-  return /协同|工作台|数字员工/iu.test(names) && !/增长|营销获客/iu.test(names)
+  const names = [manifest.label, ...files.slice(0, 3).map(file => file.path.split('/').at(-1))].join(' ')
+  return /协同|协作|工作台|数字员工/iu.test(names) && !/增长|营销获客/iu.test(names)
     ? 'collaboration' : 'growth'
 }
 
 export function salesOutlineCandidate(manifest, product, stage) {
   const files = [...(manifest.files ?? [])].filter(file => file.excerpt?.trim())
     .sort((a, b) => sourcePriority(b) - sourcePriority(a))
-  const business = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0).map(file => file.path)
   const all = files.filter(file => file.kind !== 'public').map(file => file.path)
+  const preferred = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0).map(file => file.path)
+  const business = preferred.length ? preferred : all
   const trend = files.filter(file => /增长环境|行业趋势|营销趋势|流量竞争|流量变化|合规治理|获客变化|AI\s*搜索|生成式搜索|内容供给.{0,12}(?:变化|压力|竞争|需求)|第一方数据.{0,12}(?:趋势|重要|变化)/u
     .test(`${file.path} ${file.excerpt}`)).map(file => file.path)
   const service = files.filter(file => file.kind !== 'public' && sourcePriority(file) >= 0

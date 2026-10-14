@@ -196,6 +196,8 @@ async function askInComposer(ctx, agent, signal, initial, config) {
   for (let step = 0; step < 4 && outcome.pending && ['question', 'outline'].includes(outcome.kind); step++) {
     const pending = outcome.pending
     const stage = pending.stage
+    // Word 初稿由对话消息展示链接，用户可先打开或编辑，不连续弹出选择框。
+    if (stage === 'draft-review') return outcome
     const options = stage === 'outline'
       ? [{ label: '按此大纲生成' }]
       : stage === 'evidence'
@@ -217,15 +219,25 @@ async function askInComposer(ctx, agent, signal, initial, config) {
       return outcome
     }
     if (!answer) return outcome
-    outcome = await (pending.stage.startsWith('upload-') ? resumeUpload(ctx, agent, signal, pending, answer, config)
+    outcome = await (pending.stage.startsWith('upload-') ? resumeUploadWithReview(ctx, agent, signal, pending, answer, config)
       : resumePresales(ctx, agent, signal, pending, answer, config))
-    if (pending.deliveredText) {
+    if (pending.deliveredText && !pending.resumeReview) {
       outcome.text = `${pending.deliveredText}\n\n**附件同步**：${outcome.text}`
       if (outcome.pending) outcome.pending.deliveredText = pending.deliveredText
     }
     await savePending(agent, outcome.pending)
   }
   return outcome
+}
+
+async function resumeUploadWithReview(ctx, agent, signal, pending, answer, config) {
+  const sync = await resumeUpload(ctx, agent, signal, pending, answer, config)
+  if (!pending.resumeReview) return sync
+  if (sync.pending) return { ...sync, pending: { ...sync.pending,
+    resumeReview: pending.resumeReview, deliveredText: pending.deliveredText } }
+  return { kind: 'question',
+    text: `${pending.deliveredText}\n\n**附件同步**：${sync.text}`,
+    pending: pending.resumeReview }
 }
 
 function optStr(v, field) {
@@ -522,9 +534,15 @@ export async function generateAttachedPresales(ctx, agent, signal, text, refs, s
   }
   const product = source?.product || path.basename(refs[0].name).replace(/\.[^.]+$/u, '')
   const outcome = await runPresales(ctx, agent, signal, { kind: 'path', path: directory,
-    sales: { product, stage: source?.stage ?? 'initial', sourceSummary: `当前会话 ${prepared.files.length} 份附件` } }, config)
-  if (outcome.kind !== 'success') return outcome
+    sales: { product, stage: source?.stage ?? 'initial', skipReview: source?.skipReview,
+      sourceSummary: `当前会话 ${prepared.files.length} 份附件` } }, config)
+  if (!['success', 'question'].includes(outcome.kind) || outcome.pending?.stage !== 'draft-review' && outcome.kind !== 'success') return outcome
   const sync = await startUpload(ctx, agent, signal, text, refs, config)
+  if (outcome.pending?.stage === 'draft-review') return {
+    ...outcome, text: `${outcome.text}\n\n**附件同步**：${sync.text}`,
+    pending: sync.pending ? { ...sync.pending, resumeReview: outcome.pending, deliveredText: outcome.text }
+      : outcome.pending,
+  }
   return { ...outcome, text: `${outcome.text}\n\n**附件同步**：${sync.text}`
     + (prepared.warnings.length ? `\n读取提示：${prepared.warnings.join('；')}` : ''),
     ...(sync.pending ? { pending: { ...sync.pending, deliveredText: outcome.text } } : {}) }
@@ -595,7 +613,7 @@ export function apply(ctx, config) {
       const initial = withAttachments ? generateAttachedPresales(ctx, agent, signal, text, attached, source, config)
         : upload
         ? pending?.stage?.startsWith('upload-') && !isUploadRequest(text) && !attached.length
-          ? resumeUpload(ctx, agent, signal, pending, text, config)
+          ? resumeUploadWithReview(ctx, agent, signal, pending, text, config)
           : startUpload(ctx, agent, signal, text, attached.length ? attached : await recentFiles(agent), config)
         : source?.kind === 'cancel' ? runPresales(ctx, agent, signal, source, config)
         : pending && !['path', 'auto'].includes(source?.kind) ? resumePresales(ctx, agent, signal, pending, text, config)

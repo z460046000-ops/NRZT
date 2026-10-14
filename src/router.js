@@ -3,14 +3,16 @@ import { access, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { assessMaterials, composeSections, outlineFromMaterials } from './content.js'
 import { editOutline, formatOutline, savePending, sectionsFromOutline, suggestOutline } from './outline.js'
-import { hybridSearchKnowledge, listKnowledge, listKnowledgeBases, listProjectKnowledgeBases, listProjects, resolvePlatformConfig } from './platform.js'
+import { hybridSearchKnowledge, listKnowledge, listKnowledgeBases, listProjectKnowledgeBases, listProjects, recallProjectMemory, resolvePlatformConfig } from './platform.js'
 import { salesRequest } from './sales.js'
 import { balanceRetrievalResults, platformQueries, readableSearchResult, retrievalCoverageText } from './retrieval.js'
 
 const TRIGGER = '售前解决方案'
 const PATH_FIELD = /(?:材料(?:路径)?|path)\s*[:：=]\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s，,。；;]+))/iu
+const LOCAL_MATERIAL = /(?:本地材料|本地文件|本地路径)\s*[:：=]?\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s，,。；;]+\.(?:md|txt|csv|json|html|docx|pdf|pptx|zip)))/iu
 const PATH_LIKE = /^(?:\.{0,2}[\\/]|~[\\/]|[^\s]+[\\/]|[^\s]+\.(?:md|txt|csv|json|html|docx|pdf|pptx|zip))\S*$/iu
 const PLATFORM_SOURCE = /材料\s*[:：=]\s*`?(?:平台|内容中台|知识库)`?|内容中台|(?:平台|知识库)(?:上的?|里的?|中的?)?(?:文档|材料|文件)/u
+const SKIP_REVIEW = /(?:不用|无需|不必|不要|跳过)(?:再)?(?:让我)?(?:确认|确定|审核)(?:Word|文档|初稿)?|直接(?:生成|给我|出)(?:最终|成品|正式)/u
 const FLOW_CANCEL = /^(?:取消|停止|算了|不用了|stop|cancel)[\s。!！.]*$/iu
 const reportTiming = (runId, stage, started, details = {}) => console.info('[wlyd-presales] stage',
   JSON.stringify({ runId, stage, ms: Date.now() - started, ...details }))
@@ -20,6 +22,8 @@ export function materialPath(text, command = false) {
   const input = text.trim()
   const field = PATH_FIELD.exec(input)
   if (field) return (field[1] ?? field[2] ?? field[3] ?? field[4]).trim()
+  const local = LOCAL_MATERIAL.exec(input)
+  if (local) return (local[1] ?? local[2] ?? local[3] ?? local[4]).trim()
   if (command && /^(`[^`]+`|"[^"]+"|'[^']+')$/u.test(input)) return input.slice(1, -1).trim()
   if (PATH_LIKE.test(input)) return input
   return undefined
@@ -39,13 +43,18 @@ export function mentionsPresales(text) {
  */
 export function materialSource(text, command = false) {
   const input = text.trim()
+  const skipReview = SKIP_REVIEW.test(input)
   if (FLOW_CANCEL.test(input)) return { kind: 'cancel' }
-  if (/材料\s*[:：=]\s*`?(?:平台|内容中台|知识库)`?(?:$|[\s，,。；;])/u.test(input)) return { kind: 'platform' }
+  if (/材料\s*[:：=]\s*`?(?:平台|内容中台|知识库)`?(?:$|[\s，,。；;])/u.test(input)) return { kind: 'platform', ...(skipReview ? { skipReview } : {}) }
   const material = materialPath(text, command)
-  if (material) return { kind: 'path', path: material }
+  if (material) {
+    const sales = salesRequest(input.replace(material, ' '))
+    return { kind: 'path', path: material, ...(sales ? { sales: { ...sales, ...(skipReview ? { skipReview } : {}) } } : {}),
+      ...(skipReview ? { skipReview } : {}) }
+  }
   const sales = salesRequest(input)
-  if (sales) return sales
-  if (PLATFORM_SOURCE.test(input)) return { kind: 'platform' }
+  if (sales) return { ...sales, ...(skipReview ? { skipReview } : {}) }
+  if (PLATFORM_SOURCE.test(input)) return { kind: 'platform', ...(skipReview ? { skipReview } : {}) }
   if (command && /^[A-Za-z][A-Za-z0-9._-]{1,39}$/u.test(input)) return { kind: 'auto', product: input, stage: 'initial' }
   return undefined
 }
@@ -60,11 +69,18 @@ function toolError(result) {
   return first?.text ?? result.error?.message ?? '工具执行失败'
 }
 
-async function generateDraft(ctx, agent, signal, pending, links) {
+async function generateDraft(ctx, agent, signal, pending, links, recalledMemory, config) {
   const { manifest, runId } = pending
   const composeStarted = Date.now()
+  const memory = recalledMemory ?? (pending.projectId
+    ? await recallProjectMemory(resolvePlatformConfig(config ?? {}), pending.projectId,
+      `${manifest.label} 售前解决方案`, signal).catch(error => {
+      if (signal?.aborted) throw error
+      console.warn('[wlyd-presales] memory-recall', JSON.stringify({ issue: error?.name ?? 'Error' }))
+      return { block: '' }
+    }) : { block: '' })
   const sections = await composeSections(ctx, agent, signal, manifest, pending.outline, links,
-    pending.auto ? { sales: true, stage: pending.stageType } : {})
+    { ...(pending.auto ? { sales: true, stage: pending.stageType } : {}), memoryBlock: memory.block })
   reportTiming(runId, 'compose', composeStarted, { sections: sections.length,
     issues: sections.generationIssues ?? [] })
   const substantive = value => typeof value === 'string' && value.trim()
@@ -142,7 +158,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const extractionNote = (sections.generationIssues ?? []).includes('source_extract_fallback')
     ? '\n\n**初稿说明**：模型留空的章节已从清洗后的原文提取短要点并附来源；这些是内部可编辑草稿，外发前请核对表达与适用范围。'
     : ''
-  return {
+  const final = {
     kind: 'success',
     text: `## ${manifest.label}售前解决方案\n\n${intro}${retrievalNote}${extractionNote}\n\n${delivery}\n\n**内容结构** · ${filled} 章\n\n${sections.filter(isFilled).map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
       + (usableLinks.length ? `**证据状态**：${usableLinks.length} 组问题与做法已逐项对应，仍需人工复核后使用。`
@@ -150,6 +166,14 @@ async function generateDraft(ctx, agent, signal, pending, links) {
       + (missing.length ? `\n\n**本版仍需补充**：${missing.join('、')}。当前已交付有依据的章节。缺少的内容不会填成占位页；外发前请在检查面板复核。你可以在输入框补充目标客户、实际问题、场景或产品已验证能力；也可以回复“搜索公开资料”，让我只补行业背景与典型问题。补充后会另存新版。` : ''),
     ...(missing.length ? { pending: { ...pending, stage: 'draft-gaps', missing } } : {}),
   }
+  if (pending.skipReview) return final
+  const wordLink = webBase ? `${webBase}solution.docx` : value.docxPath
+  const editHint = value.editUrl ? `需要修改时可在 [HTML 编辑页](${value.editUrl}) 调整，保存会同步 Word。`
+    : '需要修改时可先补充意见，再生成新版。'
+  return { kind: 'question',
+    text: `已将 ${filled} 章有依据的内容拼成 Word 初稿。请先打开 [Word 初稿](${wordLink}) 核对文案；${editHint}确认后在对话里说“确认并交付”；如果还要补充材料，也可以直接说明。${missing.length ? `\n\n本版尚缺：${missing.join('、')}。` : ''}`,
+    pending: { ...pending, stage: 'draft-review', finalText: final.text,
+      finalPending: final.pending, wordLink, editUrl: value.editUrl } }
 }
 
 function propose(pending, links, outline) {
@@ -160,7 +184,7 @@ function propose(pending, links, outline) {
 }
 
 /** 平台材料入口:先选项目，再从项目已绑定知识库中选资料。 */
-async function pullPlatformMaterials(ctx, agent, signal, config, runId) {
+async function pullPlatformMaterials(ctx, agent, signal, config, runId, skipReview = false) {
   const cfg = resolvePlatformConfig(config ?? {})
   let projects
   try {
@@ -176,13 +200,13 @@ async function pullPlatformMaterials(ctx, agent, signal, config, runId) {
     return {
       kind: 'question',
       text: `内容中台有 ${projects.length} 个可访问项目，回复编号选择：\n${menu}\n回复“取消”退出。`,
-      pending: { stage: 'platform-project', runId, options: projects },
+      pending: { stage: 'platform-project', runId, options: projects, skipReview },
     }
   }
-  return pullProjectKnowledgeBases(ctx, agent, signal, config, projects[0], runId)
+  return pullProjectKnowledgeBases(ctx, agent, signal, config, projects[0], runId, skipReview)
 }
 
-async function pullProjectKnowledgeBases(ctx, agent, signal, config, project, runId) {
+async function pullProjectKnowledgeBases(ctx, agent, signal, config, project, runId, skipReview = false) {
   const cfg = resolvePlatformConfig(config ?? {})
   let bases
   try {
@@ -197,15 +221,21 @@ async function pullProjectKnowledgeBases(ctx, agent, signal, config, project, ru
   if (bases.length > 1) {
     const menu = bases.map((kb, index) => `${index + 1}. ${kb.name}`).join('\n')
     return { kind: 'question', text: `项目「${project.name}」有 ${bases.length} 个可读取知识库，回复编号选择：\n${menu}\n回复“取消”退出。`,
-      pending: { stage: 'platform-kb', runId, options: bases } }
+      pending: { stage: 'platform-kb', runId, projectId: project.id, options: bases, skipReview } }
   }
-  return pullFromKnowledgeBase(ctx, agent, signal, config, bases[0], runId)
+  return pullFromKnowledgeBase(ctx, agent, signal, config, bases[0], runId, undefined, project.id, skipReview)
 }
 
 /** 每轮独立暂存已解析文档，避免旧资料与同名文档进入本轮方案。 */
-async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sales) {
+async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sales, projectId, skipReview = false) {
   const cfg = resolvePlatformConfig(config ?? {})
   const retrievalStarted = Date.now()
+  const memoryPromise = projectId && sales ? recallProjectMemory(cfg, projectId,
+    `${sales?.product ?? kb.name} 售前解决方案 ${sales?.stage === 'deep' ? '深入接触' : '初次接触'}`, signal)
+    .catch(error => {
+      console.warn('[wlyd-presales] memory-recall', JSON.stringify({ issue: error?.name ?? 'Error' }))
+      return { block: '' }
+    }) : Promise.resolve({ block: '' })
   const cwd = agent?.session?.header?.cwd ?? process.cwd()
   let docs
   try {
@@ -293,13 +323,18 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
     retrievalSnapshotPath: snapshotPath,
     retrievalCoverage: coverage,
   }
+  const memory = await memoryPromise
+  reportTiming(runId, 'memory-recall', retrievalStarted,
+    { personal: memory.personalCount ?? 0, project: memory.projectCount ?? 0 })
   let outcome
   if (sales) {
     outcome = await generateSalesDraft(ctx, agent, signal, manifest, runId,
       { ...sales, product: sales.product ?? manifest.label,
+        memoryBlock: memory.block,
         sourceSummary: [sales.sourceSummary ?? `内容中台「${kb.name}」混合检索（${files.length} 个片段）`, retrievalCoverageText(coverage)].filter(Boolean).join('；') })
   } else {
-    const pending = { stage: 'evidence', manifest, runId, sourceSummary: retrievalCoverageText(coverage) }
+    const pending = { stage: 'evidence', manifest, runId, projectId, skipReview,
+      sourceSummary: retrievalCoverageText(coverage) }
     const assessment = await assessMaterials(ctx, agent, signal, manifest)
     if (assessment.kind === 'question') return { kind: 'question', text: assessment.question, pending }
     outcome = propose(pending, assessment.links, assessment.outline)
@@ -308,7 +343,7 @@ async function pullFromKnowledgeBase(ctx, agent, signal, config, kb, runId, sale
 }
 
 /** 导入材料并判断证据是否充足;本地路径与平台拉取共用这一条下游链路。 */
-async function ingestAndAssess(ctx, agent, signal, inputPath, label, runId, sales) {
+async function ingestAndAssess(ctx, agent, signal, inputPath, label, runId, sales, skipReview = false) {
   const call = (name, args) => ctx.tools.execute({
     callId: randomUUID(), name, arguments: args, agent, signal,
   })
@@ -326,7 +361,7 @@ async function ingestAndAssess(ctx, agent, signal, inputPath, label, runId, sale
     return { kind: 'error', text: '材料已登记，但正文为空。请提供包含文字的文件后重试。' }
   }
   if (sales) return generateSalesDraft(ctx, agent, signal, manifest, runId, sales)
-  const pending = { stage: 'evidence', manifest, runId, inputPath }
+  const pending = { stage: 'evidence', manifest, runId, inputPath, skipReview }
   const assessment = await assessMaterials(ctx, agent, signal, manifest)
   if (assessment.kind === 'question') {
     pending.gapQuestion = assessment.question
@@ -359,8 +394,8 @@ async function generateSalesDraft(ctx, agent, signal, manifest, runId, sales) {
   const links = assessment?.kind === 'ready' ? assessment.links : []
   return generateDraft(ctx, agent, signal, {
     manifest, runId, outline, auto: true, stageType: sales.stage,
-    sourceSummary: sales.sourceSummary,
-  }, links)
+    sourceSummary: sales.sourceSummary, skipReview: sales.skipReview,
+  }, links, { block: sales.memoryBlock ?? '' })
 }
 
 function productMatchScore(name, product) {
@@ -425,7 +460,8 @@ async function autoPresales(ctx, agent, signal, source, config, runId) {
         pending: { stage: 'auto-kb', runId, options: tied, sales: source } }
     }
     const outcome = await pullFromKnowledgeBase(ctx, agent, signal, config, choices[0].kb, runId,
-      { product: source.product, stage: source.stage, sourceSummary: `内容中台「${choices[0].name}」` })
+      { product: source.product, stage: source.stage, skipReview: source.skipReview,
+        sourceSummary: `内容中台「${choices[0].name}」` }, choices[0].project.id)
     if (outcome.kind !== 'error' || outcome.reason === 'draft_generation') return outcome
   }
   const publicManifest = await publicProductManifest(ctx, agent, signal, source.product, runId)
@@ -454,8 +490,8 @@ export async function runPresales(ctx, agent, signal, source, config) {
   }
   const runId = `presales-runs/${Date.now()}-${randomUUID().slice(0, 8)}`
   if (source.kind === 'auto') return autoPresales(ctx, agent, signal, source, config, runId)
-  if (source.kind === 'platform') return pullPlatformMaterials(ctx, agent, signal, config, runId)
-  return ingestAndAssess(ctx, agent, signal, source.path, source.sales?.product, runId, source.sales)
+  if (source.kind === 'platform') return pullPlatformMaterials(ctx, agent, signal, config, runId, source.skipReview)
+  return ingestAndAssess(ctx, agent, signal, source.path, source.sales?.product, runId, source.sales, source.skipReview)
 }
 
 /** 按编号或唯一名称子串选择项目/知识库;选不出返回 undefined。 */
@@ -616,7 +652,7 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
     const picked = pickKnowledgeBase(pending.options ?? [], text)
     if (!picked) return { kind: 'question', text: `请选择编号：\n${pending.options.map((item, i) => `${i + 1}. ${item.name}`).join('\n')}`, pending }
     return pullFromKnowledgeBase(ctx, agent, signal, config, picked.kb, pending.runId,
-      { ...pending.sales, sourceSummary: `内容中台「${picked.name}」` })
+      { ...pending.sales, sourceSummary: `内容中台「${picked.name}」` }, picked.project.id)
   }
   if (pending.stage === 'platform-project') {
     const picked = pickKnowledgeBase(pending.options ?? [], text)
@@ -624,7 +660,7 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
       const menu = (pending.options ?? []).map((project, index) => `${index + 1}. ${project.name}`).join('\n')
       return { kind: 'question', text: `请回复编号选择项目：\n${menu}\n回复“取消”退出。`, pending }
     }
-    return pullProjectKnowledgeBases(ctx, agent, signal, config, picked, pending.runId)
+    return pullProjectKnowledgeBases(ctx, agent, signal, config, picked, pending.runId, pending.skipReview)
   }
   if (pending.stage === 'platform-kb') {
     const picked = pickKnowledgeBase(pending.options ?? [], text)
@@ -632,7 +668,19 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
       const menu = (pending.options ?? []).map((kb, index) => `${index + 1}. ${kb.name}`).join('\n')
       return { kind: 'question', text: `请回复编号选择知识库：\n${menu}\n回复“取消”退出。`, pending }
     }
-    return pullFromKnowledgeBase(ctx, agent, signal, config, picked, pending.runId)
+    return pullFromKnowledgeBase(ctx, agent, signal, config, picked, pending.runId, undefined, pending.projectId, pending.skipReview)
+  }
+  if (pending.stage === 'draft-review') {
+    if (/^(?:确认并交付|确认交付|按此稿交付|按这版交付|可以交付|就按这个交付|确认|可以|确定)(?:了|吧|，?直接交付)?[。！!]*$/u.test(text)
+      || SKIP_REVIEW.test(text)) {
+      return { kind: 'success', text: pending.finalText,
+        ...(pending.finalPending ? { pending: pending.finalPending } : {}) }
+    }
+    if (pending.finalPending && (/^(?:补充|说明)\s*[:：]/u.test(text) || SEARCH_HINT.test(text))) {
+      return resumePresales(ctx, agent, signal, pending.finalPending, text, config)
+    }
+    return { kind: 'question',
+      text: `Word 初稿：[打开核对](${pending.wordLink})。${pending.editUrl ? `文案可在 [HTML 编辑页](${pending.editUrl}) 修改并保存。` : '可补充修改意见再生成新版。'}之后回复“确认并交付”。`, pending }
   }
   if (pending.stage === 'draft-gaps') {
     const runId = `presales-runs/${Date.now()}-${randomUUID().slice(0, 8)}`
@@ -655,7 +703,8 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
     const manifest = { ...pending.manifest, files: [...(pending.manifest.files ?? []), ...additions],
       counts: { ...pending.manifest.counts, extracted: (pending.manifest.counts?.extracted ?? 0) + additions.length } }
     return generateSalesDraft(ctx, agent, signal, manifest, runId,
-      { product: pending.manifest.label, stage: pending.stageType ?? 'initial', sourceSummary })
+      { product: pending.manifest.label, stage: pending.stageType ?? 'initial', sourceSummary,
+        skipReview: pending.skipReview })
   }
   if (pending.stage === 'generating') {
     if (text !== '重试生成') return { kind: 'question', text: '上次确认后正在生成或因重启中断。请先检查该次输出目录；如需恢复，回复“重试生成”。', pending }
@@ -671,15 +720,17 @@ export async function resumePresales(ctx, agent, signal, pending, answer, config
     }
   }
   if (pending.stage === 'outline') {
+    if (SKIP_REVIEW.test(text)) pending.skipReview = true
     const directEdit = editOutline(pending.outline, text)
-    const direct = directReplyIntent('outline', text)
+    const direct = /^确认大纲[，, ]*直接(?:出|生成)(?:最终|成品)/u.test(text)
+      ? 'confirm' : directReplyIntent('outline', text)
     const interpreted = !direct && directEdit.error
       ? await inferReplyIntent(ctx, agent, signal, 'outline', text, pending.outline)
       : { intent: direct }
     if (interpreted.intent === 'confirm') {
       pending.stage = 'generating'
       await savePending(agent, pending)
-      const outcome = await generateDraft(ctx, agent, signal, pending, pending.links)
+      const outcome = await generateDraft(ctx, agent, signal, pending, pending.links, undefined, config)
       if (outcome.kind === 'error') { pending.stage = 'outline'; return { ...outcome, pending } }
       return outcome
     }

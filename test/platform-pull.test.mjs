@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/prom
 import os from 'node:os'
 import path from 'node:path'
 import { runPresales, resumePresales } from '../src/router.js'
+import { recallProjectMemory } from '../src/platform.js'
 
 /** 与真实 dsh 相同的 fs 面:resolve 相对路径 + 受检写入。 */
 function fsShim() {
@@ -89,6 +90,20 @@ const jsonResponse = body => new Response(JSON.stringify(body), { status: 200, h
 
 const CONFIG = { baseUrl: 'http://platform.test', email: 'a@b.c', password: 'p', tenantId: '1' }
 
+test('项目记忆按当前项目和租户召回，保留平台生成的提示词块', async () => {
+  const block = '\n<user_memory>只用短句</user_memory>'
+  const result = await withFetch([
+    ['http://platform.test/api/v1/auth/login', () => jsonResponse({ token: 't', refresh_token: '' })],
+    ['http://platform.test/api/v1/solutions/projects/p1/memory/recall', (url, input) => {
+      assert.match(url, /query=CallWan%20%E5%94%AE%E5%89%8D/u)
+      assert.equal(input.headers.get('X-Tenant-ID'), '1')
+      assert.equal(input.headers.get('Authorization'), 'Bearer t')
+      return jsonResponse({ data: { personal: [{ id: 'm1' }], project: [{ id: 'm2' }], block } })
+    }],
+  ], () => recallProjectMemory(CONFIG, 'p1', 'CallWan 售前'))
+  assert.deepEqual(result, { block, personalCount: 1, projectCount: 1 })
+})
+
 function platformRoutes({ bases, knowledge, hybridResults, hybridFailure,
   projects = [{ id: 'p1', name: '售前项目' }], bindings = [{ knowledge_base_id: 'kb' }] }) {
   const results = hybridResults ?? [{ id: 'chunk-1', knowledge_id: knowledge?.[0]?.id ?? 'k1',
@@ -165,10 +180,11 @@ test('内容中台来源：主题无命中时换问法重试，并在生成结�
   })
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
     { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
-  assert.equal(outcome.kind, 'success', outcome.text)
+  assert.equal(outcome.kind, 'question', outcome.text)
+  assert.equal(outcome.pending.stage, 'draft-review')
   assert.equal(seen.length, 5)
   assert.ok(seen.some(query => /遇到的问题/u.test(query)))
-  assert.match(outcome.text, /客户问题 [1-4] 条/u)
+  assert.match(outcome.pending.finalText, /客户问题 [1-4] 条/u)
   const runs = await readdir(path.join(cwd, 'presales-runs'))
   const snapshot = JSON.parse(await readFile(path.join(cwd, 'presales-runs', runs[0], 'research/retrieval-snapshot.json'), 'utf8'))
   assert.ok(snapshot.queries.some(query => query.attempt === 2 && query.topic === 'pain'))
@@ -274,12 +290,13 @@ test('只说 CallWan 售前方案：自动读取匹配知识库并直接生成�
   })
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
     { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
-  assert.equal(outcome.kind, 'success', outcome.text)
+  assert.equal(outcome.kind, 'question', outcome.text)
+  assert.equal(outcome.pending.stage, 'draft-review')
   assert.deepEqual(tools.calls, ['wlyd_solution'])
-  assert.match(outcome.text, /内容中台/)
+  assert.match(outcome.pending.finalText, /内容中台/)
   assert.ok(generated.sections.length > 0)
   assert.ok(generated.sections.every(section => section.blocks.some(block => block.type === 'para' && !/待与贵方确认/u.test(block.text))))
-  assert.match(outcome.text, /本版仍需补充/u)
+  assert.match(outcome.pending.finalText, /本版仍需补充/u)
   assert.ok(generated.sections.every(section => !/接口|Swagger|API/iu.test(section.heading)))
 })
 
@@ -301,13 +318,14 @@ test('匹配知识库暂不可读时自动查公开资料并直接生成待核�
   })
   const outcome = await withFetch(routes, () => runPresales(ctx, agent, new AbortController().signal,
     { kind: 'auto', product: 'CallWan', stage: 'initial' }, CONFIG))
-  assert.equal(outcome.kind, 'success', outcome.text)
+  assert.equal(outcome.kind, 'question', outcome.text)
+  assert.equal(outcome.pending.stage, 'draft-review')
   assert.deepEqual(tools.calls, ['web_search', 'wlyd_solution'])
-  assert.match(outcome.text, /公开网页摘要（待核实）/)
+  assert.match(outcome.pending.finalText, /公开网页摘要（待核实）/)
   assert.equal(generated.pain_solution_links.length, 0)
   assert.ok(generated.sections.length > 0)
   assert.ok(generated.sections.every(section => section.blocks.some(block => block.type === 'para' && !/待与贵方确认/u.test(block.text))))
-  assert.match(outcome.text, /本版仍需补充/u)
+  assert.match(outcome.pending.finalText, /本版仍需补充/u)
 })
 
 test('知识库已读到材料但组稿失败时保留原错误，不改用单条公开摘要', async () => {

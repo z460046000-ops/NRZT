@@ -101,6 +101,12 @@ test('材料来源识别：取消词、明确路径优先于平台词', () => {
   assert.equal(materialSource('确认大纲', true), undefined)
 })
 
+test('路径和产品名同时出现时保留真实产品名，不把文件名当产品', () => {
+  const source = materialSource('用本地材料 presales-validation/plugin-smoke-20261013.md 生成星桥协作台的售前解决方案。')
+  assert.equal(source.path, 'presales-validation/plugin-smoke-20261013.md')
+  assert.equal(source.sales?.product, '星桥协作台')
+})
+
 test('材料驱动大纲为约 3—6 章，痛点与方案保持同一编号', () => {
   const sections = outlineFromManifest({ files: [{ path: 'materials/a.md', excerpt: sourceText }] }, [{ id: 'P1', ...readyLinks[0] }])
   assert.ok(sections.length >= 3 && sections.length <= 6)
@@ -204,8 +210,8 @@ test('有一章有据时先交付初稿，点名缺章并允许补充或公开�
       if (options.system.includes('售前材料证据审查员')) answer = { decision: 'ask', question: '客户场景待确认' }
       else if (options.system.includes('售前方案撰写员')) {
         const input = JSON.parse(options.messages[0].content[0].text)
-        answer = { sections: input.outline.map((item, index) => ({ heading: item.heading,
-          blocks: index === 0 ? [{ type: 'para', text: '产品帮助团队统一管理资料。',
+        answer = { sections: input.outline.map(item => ({ heading: item.heading,
+          blocks: item.heading === '产品能力' ? [{ type: 'para', text: '产品帮助团队统一管理资料。',
             path: 'CallWan-产品介绍.md', quote: '产品提供统一资料管理' }] : [] })) }
       } else if (options.system.includes('只写售前方案')) answer = { blocks: [] }
       yield { type: 'text-delta', text: JSON.stringify(answer) }
@@ -226,7 +232,7 @@ test('有一章有据时先交付初稿，点名缺章并允许补充或公开�
   const initial = await resumePresales(ctx, agent, signal, { stage: 'outline', runId: 'draft-run',
     manifest: { label: 'CallWan', counts: { extracted: 1 }, files: [
       { path: 'CallWan-产品介绍.md', excerpt: source },
-    ] }, outline, links: [], auto: true, stageType: 'initial' }, '确认大纲')
+    ] }, outline, links: [], auto: true, stageType: 'initial', skipReview: true }, '确认大纲')
   assert.equal(initial.kind, 'success')
   assert.doesNotMatch(calls.find(call => call.name === 'wlyd_solution').arguments.subtitle, /待复核|初次接触版/u)
   assert.equal(initial.pending.stage, 'draft-gaps')
@@ -305,7 +311,7 @@ test('自然语言路由和命令均经插件按导入、方案顺序执行', as
     return (async function* () {})()
   })) chunks.push(chunk)
   assert.equal(ordinaryModelCalled, false, '售前路由完成后不再让模型二次生成')
-  assert.match(chunks[0].text, /已按确认大纲生成/)
+  assert.match(chunks[0].text, /Word 初稿/)
   await listener({ agent, signal }, async () => decision)
   assert.equal(calls.length, registeredCount + 2, '同一消息重试不能再次写文件')
 
@@ -343,7 +349,7 @@ test('只给方案目标时询问产品名，后续仍可改用材料路径', as
   assert.deepEqual(calls, [])
   await listener({ agent, signal }, async () => enter('m2', 'materials/'))
   assert.deepEqual(calls, ['wlyd_ingest'])
-  await listener({ agent, signal }, async () => enter('m3', '确认大纲'))
+  await listener({ agent, signal }, async () => enter('m3', '确认大纲，直接出最终产物'))
   assert.deepEqual(calls, ['wlyd_ingest', 'wlyd_solution'])
   const unrelated = await listener({ agent, signal }, async () => enter('m4', '今天天气'))
   assert.equal(unrelated.messages.length, 1)
@@ -419,6 +425,7 @@ test('真实工具执行后得到可编辑源稿、预览和 Word 文件', async
   const oldHome = process.env.DSH_HOME
   process.env.DSH_HOME = path.join(cwd, 'dsh')
   let result
+  let review
   try {
     const agent = { options: { provider: 'mock', model: 'mock' }, session: { header: { cwd } } }
     const proposed = await runPresales(ctx, agent, new AbortController().signal, 'materials/')
@@ -428,11 +435,14 @@ test('真实工具执行后得到可编辑源稿、预览和 Word 文件', async
     assert.equal(merged.kind, 'outline')
     const reordered = await resumePresales(ctx, agent, new AbortController().signal, merged.pending, '顺序：2,1,3')
     assert.equal(reordered.pending.outline[0].heading, '方案与能力')
-    result = await resumePresales(ctx, agent, new AbortController().signal, reordered.pending, '确认大纲')
+    review = await resumePresales(ctx, agent, new AbortController().signal, reordered.pending, '确认大纲')
+    result = await resumePresales(ctx, agent, new AbortController().signal, review.pending, '确认并交付')
   } finally {
     if (oldHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = oldHome
   }
+  assert.equal(review.kind, 'question', review.text)
+  assert.match(review.text, /Word 初稿/u)
   assert.equal(result.kind, 'success', result.text)
   assert.match(result.text, /\[内部稿 Word\]\([^)]*solution\.docx\)/)
   const run = (await readdir(path.join(cwd, 'presales-runs')))[0]
@@ -479,7 +489,7 @@ test('资料不足先提问，用户可选择待确认结构稿或停止', async
   const draft = await resumePresales(ctx, agent, signal, question.pending, '标待确认继续')
   assert.equal(draft.kind, 'outline')
   assert.deepEqual(calls, ['wlyd_ingest'])
-  const approved = await resumePresales(ctx, agent, signal, draft.pending, '确认大纲')
+  const approved = await resumePresales(ctx, agent, signal, draft.pending, '确认大纲，直接出最终产物')
   assert.equal(approved.kind, 'success')
   assert.deepEqual(calls, ['wlyd_ingest', 'wlyd_solution'])
 })
@@ -631,7 +641,7 @@ test('DSH 输入区可直接选择确认大纲并继续生成', async () => {
   apply(ctx)
   const result = await commands.get('presales').handler({ agent: { options: { provider: 'mock', model: 'mock' } },
     rawInput: 'materials/', signal: new AbortController().signal })
-  assert.match(result.text, /生成初稿/)
+  assert.match(result.text, /Word 初稿/)
   assert.equal(asked.length, 1)
   assert.match(asked[0].detail, /建议结构/)
   assert.doesNotMatch(asked[0].detail, /确认大纲|顺序：|新增章节：/)
