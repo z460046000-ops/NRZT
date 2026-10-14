@@ -85,6 +85,8 @@
     const heading = document.createElement('h4')
     heading.textContent = typeNames[block.type] ?? '内容'
     area.append(heading)
+    if (block.type === 'para' && block.title) field(area, '短标题', `blocks/${block.id}/title`, block.title)
+    if (block.type === 'para' && block.label) field(area, '类别', `blocks/${block.id}/label`, block.label)
     if (block.type === 'para' || block.type === 'quote') field(area, '正文', `blocks/${block.id}/text`, block.text, true)
     if (block.type === 'bullets' || block.type === 'steps') block.items.forEach((item, index) => {
       field(area, `${index + 1}`, `blocks/${block.id}/items/${index}`, item, true)
@@ -169,7 +171,8 @@
       group.append(summary)
       field(group, '章节标题', `sections/${section.id}/heading`, section.heading)
       field(group, '章节说明', `sections/${section.id}/lead`, section.lead ?? '', true)
-      if (['pains', 'solution'].includes(section.kind) && solution.painSolutionLinks?.length) {
+      if (['pains', 'solution'].includes(section.kind) && solution.painSolutionLinks?.length
+        && section.blocks.length === 1 && section.blocks[0].type === 'table') {
         const hint = document.createElement('p')
         hint.className = 'editor-hint'
         hint.textContent = '本章对照表由上方的痛点与解决方案自动生成。'

@@ -53,7 +53,9 @@ export function customerFacingSolution(solution) {
         const id = block.id ?? `block-${s}-${b}`
         const root = `blocks/${id}`
         if (block.type === 'quote' && /^来源[:：]/u.test(block.text)) return { ...block, id }
-        if (block.type === 'para' || block.type === 'quote') return { ...block, id, text: copy(block.text, `${root}/text`) }
+        if (block.type === 'para' || block.type === 'quote') return { ...block, id, text: copy(block.text, `${root}/text`),
+          ...(block.title ? { title: copy(block.title, `${root}/title`) } : {}),
+          ...(block.label ? { label: copy(block.label, `${root}/label`) } : {}) }
         if (block.type === 'bullets' || block.type === 'steps') return { ...block, id, items: block.items.map((v, i) => copy(v, `${root}/items/${i}`)) }
         if (block.type === 'table') {
           const evidence = block.headers.map(header => /来源|依据|出处|证据/u.test(header))
@@ -75,7 +77,7 @@ export function customerFacingSolution(solution) {
     })),
   }
   const derived = new Set(result.painSolutionLinks?.length
-    ? result.sections.filter(section => ['pains', 'solution'].includes(section.kind)).flatMap(section => section.blocks.map(block => block.id)) : [])
+    ? result.sections.filter(section => ['pains', 'solution'].includes(section.kind) && section.blocks.length === 1 && section.blocks[0].type === 'table').flatMap(section => section.blocks.map(block => block.id)) : [])
   result.copyReview = [...reviews.values()].filter(item => !derived.has(item.path.split('/')[1]))
   return result
 }

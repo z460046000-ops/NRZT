@@ -49,6 +49,8 @@ export function renderMarkdown(solution, assets) {
 function pushBlock(lines, block, assetByName) {
   switch (block.type) {
     case 'para':
+      if (block.label) lines.push(`**${block.label}**`, '')
+      if (block.title) lines.push(`### ${block.title}`, '')
       lines.push(block.text, '')
       break
     case 'bullets':

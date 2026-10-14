@@ -83,3 +83,11 @@
 - [SkillHub `html-ppt-skill` 2.3.0](https://skillhub.cn/skills/user_e9af5021/html-ppt-skill)：视口安全的 16:9 页面、键盘导航、打印和字号检查思路；本插件只实现适合售前方案的原创适配，未复制其 ZIP 内容或依赖 WorkBuddy 的 PPTX 分支。
 - [SkillHub `ui-new`](https://skillhub.cn/skills/user_865e3592/ui-new)：视觉层级、文字对比度、间距及控件状态的审查方法。
 - [SkillHub `ui-ux-designer`](https://skillhub.cn/skills/user_ad872d55/ui-ux-designer)：设计令牌、用户阅读路径、内容与版式匹配的判断方法。
+
+## 本版可执行设计约束（0.9.26）
+
+- 新方案先按产品、受众与内容选择 `paper / signal / night / redline` 的一种整稿方向；方向内从有对比度的配色组取色，并避免与同方向上一份新稿同色。`visualDesign.palette` 写入 JSON，编辑、预览和外发继承，不在同一份稿里轮换。
+- 模型的普通说明块应提供 `label`（类别短语）、`title`（具体短主张）、`text`（两三句说明）及最多三个原文已有的 `emphasis` 重点词。渲染器用小标签、中标题、正常字号正文呈现。痛点先解释工作场景和麻烦，方案只用短标签回扣痛点并展开做法。
+- 数值仅在同一段可核实引文同时支持标签、数值与单位时放大。缺少真实截图时，按适合的产品能力、场景与架构章给出可点击的图片上传位置，说明所需界面；不绘制假产品界面。
+- 来源隐藏只切换辅助证据层，不移走主内容版心。每页采用相同安全边距；内容按密度分页，流程跨页保留编号与页型。
+- 规则从随包的四个 Skill 加载：`wlyd-presales-copywriting`、`wlyd-presales-html-ppt`、`wlyd-presales-design-master`、`wlyd-presales-huashu-design`。后者按 [Huashu Design](https://github.com/alchaincyf/huashu-design) 的内容优先、真实资产、阅读层级和五维复核方法做售前适配；没有复制或执行上游导出脚本。`skillExecution` 可证明注入阶段与规则哈希，不能代替逐页视觉验收。

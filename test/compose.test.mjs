@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { composeSections, outlineFromMaterials } from '../src/content.js'
+import { skillExecutionFor, loadPresalesSkills, useSkillRegistryContext } from '../src/skill-runtime.js'
 import { salesOutlineCandidate, salesScenario } from '../src/sales.js'
 
 test('按材料区分增长与协同叙事，公开摘要不能作为产品能力章来源', () => {
@@ -68,6 +69,58 @@ test('模型把公开摘要写成产品能力时由代码拒绝', async () => {
   const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
     new AbortController().signal, manifest, outline, [], { sales: true })
   assert.match(sections[0].blocks[0].text, /待与贵方确认/u)
+})
+
+test('DSH Skill 目录读取失败时仍使用随包规则并继续调用模型', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: 'CallWan 支持销售查看线索状态。' }] }
+  const outline = [{ heading: '线索管理', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  let calls = 0
+  const agent = { options: { provider: 'mock', model: 'mock' } }
+  const ctx = { skills: { async get() { throw new Error('registry lookup failed') } },
+    llm: { async *stream() {
+      calls++
+      yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '线索管理', blocks: [
+        { type: 'para', text: '销售可以查看线索状态。', path: 'product.md', quote: '支持销售查看线索状态' },
+      ] }] }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } } }
+  const sections = await composeSections(ctx, agent, new AbortController().signal, manifest, outline, [])
+  assert.equal(calls, 1)
+  assert.equal(sections[0].blocks[0].text, '销售可以查看线索状态。')
+  assert.ok(skillExecutionFor(agent).some(run => run.skills.some(skill => skill.loader === 'bundled-after-registry-error')))
+})
+
+test('模型服务整稿与单章都失败时只探测一章，不继续重复请求', async () => {
+  const manifest = { files: [{ path: 'product.md', excerpt: 'CallWan 支持销售查看线索状态。' }] }
+  const outline = [
+    { heading: '线索管理', topics: ['capabilities'], sourcePaths: ['product.md'] },
+    { heading: '使用场景', topics: ['scenarios'], sourcePaths: ['product.md'] },
+  ]
+  let calls = 0
+  const ctx = { llm: { async *stream(options) {
+    calls++
+    assert.ok(options.signal instanceof AbortSignal)
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'UPSTREAM_UNAVAILABLE', status: 503 } } }
+  } } }
+  const sections = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [])
+  assert.equal(calls, 2)
+  assert.ok(sections.generationIssues.includes('model_error'))
+})
+
+test('通过注入的 DSH skills 上下文读取规则，不访问未声明服务的插件上下文', async () => {
+  const ctx = {}
+  Object.defineProperty(ctx, 'skills', { get() { throw new Error('cannot get property "skills" without inject') } })
+  const agent = { session: { header: { cwd: '/workspace' } } }
+  const calls = []
+  useSkillRegistryContext(ctx, { skills: { async get(name, options) {
+    calls.push({ name, options })
+    return { content: `来自 DSH 目录的规则：${name}` }
+  } } })
+  const body = await loadPresalesSkills(ctx, agent, new AbortController().signal, 'outline')
+  assert.match(body, /来自 DSH 目录的规则/u)
+  assert.equal(calls.length, 3)
+  assert.ok(skillExecutionFor(agent)[0].skills.every(skill => skill.loader === 'dsh-registry'))
 })
 
 test('确认大纲后只接受有原文依据且属于该章来源的段落', async () => {
@@ -403,4 +456,68 @@ test('售前营销正文由模型归纳，技术接口目录不能覆盖客户�
   assert.match(prompts[0], /每句话增加信息/u)
   assert.match(prompts[1], /不固定章节或强制四字对仗/u)
   assert.match(prompts[1], /制作提示/u)
+})
+
+test('确定性组稿显式注入四份 Skill，并用锚点回填逐字来源', async () => {
+  const source = '多渠道线索散在评论与表单，销售难以判断谁在跟进。CallWan 将互动统一记为线索，并保留来源和处理状态。'
+  const manifest = { files: [{ path: 'product.md', excerpt: source }] }
+  const outline = [{ heading: '线索承接', topics: ['capabilities'], sourcePaths: ['product.md'] }]
+  const seen = []
+  const loaded = []
+  const agent = { options: { provider: 'mock', model: 'mock' } }
+  const ctx = { skills: { async get(name) { loaded.push(name); return undefined } }, llm: {
+    async *stream(options) {
+      seen.push(options)
+      const input = JSON.parse(options.messages[0].content[0].text)
+      const anchor = input.sources[0].evidence.find(item => item.text.includes('CallWan'))
+      assert.ok(anchor)
+      yield { type: 'text-delta', text: JSON.stringify({ sections: [{ heading: '线索承接', blocks: [
+        { type: 'para', label: '线索分散', title: '跟进状态看得见', text: 'CallWan 统一记录互动线索。销售可以查看线索来源与处理状态。',
+          emphasis: ['线索来源'], evidenceId: anchor.id },
+        { type: 'para', text: '凭空增加百分之九十收入。', evidenceId: 'K1:E999' },
+      ] }] }) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  } }
+  const result = await composeSections(ctx, agent, new AbortController().signal, manifest, outline, [])
+  assert.equal(result[0].blocks[0].title, '跟进状态看得见')
+  assert.deepEqual(result[0].blocks[0].emphasis, ['线索来源'])
+  assert.match(result[0].blocks[1].text, /CallWan 将互动统一记为线索/u)
+  assert.equal(JSON.stringify(result).includes('百分之九十'), false)
+  assert.deepEqual([...new Set(loaded)].sort(), [
+    'wlyd-presales-copywriting', 'wlyd-presales-design-master', 'wlyd-presales-html-ppt',
+    'wlyd-presales-huashu-design',
+  ])
+  assert.ok(seen[0].system.includes('<skill name="wlyd-presales-design-master">'))
+  assert.ok(seen[0].system.includes('references/presales-design.md'))
+  assert.ok(seen[0].system.includes('<skill name="wlyd-presales-huashu-design">'))
+  assert.ok(seen[0].system.includes('references/presales-deck.md'))
+  assert.equal(skillExecutionFor(agent)[0].status, 'injected')
+})
+
+test('模型返回空章节时仍可从单份已清洗材料恢复有出处的内部初稿', async () => {
+  const excerpt = '星桥协作台面向销售团队，用于集中管理客户咨询。\n典型问题：咨询分散在多个入口，负责人难以判断谁在跟进。\n对应做法：工作台汇总咨询来源，并记录负责人和下一步动作。\n上线时先导入试点团队的线索，再核对字段和责任人。'
+  const manifest = { files: [{ path: 'product.md', excerpt, kind: 'user' }] }
+  const outline = [
+    { heading: '产品背景', topics: ['context'], sourcePaths: ['product.md'] },
+    { heading: '典型挑战', topics: ['problem_solution'], sourcePaths: ['product.md'] },
+    { heading: '工作台能力', topics: ['capabilities'], sourcePaths: ['product.md'] },
+    { heading: '试点实施', topics: ['implementation'], sourcePaths: ['product.md'] },
+  ]
+  let calls = 0
+  const ctx = { llm: { async *stream() {
+    calls++
+    yield { type: 'text-delta', text: JSON.stringify(calls === 1
+      ? { sections: outline.map(item => ({ heading: item.heading, blocks: [] })) }
+      : { blocks: [] }) }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  } } }
+  const result = await composeSections(ctx, { options: { provider: 'mock', model: 'mock' } },
+    new AbortController().signal, manifest, outline, [], { sales: true })
+  assert.equal(result.length, 4)
+  assert.ok(result.every(section => section.blocks.some(block => block.type === 'para')))
+  assert.ok(result.every(section => section.blocks.some(block => block.type === 'quote')))
+  assert.ok(result.flatMap(section => section.blocks).every(block => block.type !== 'quote'
+    || excerpt.includes(block.text.split('\n').at(-1))))
+  assert.ok(result.generationIssues.includes('source_extract_fallback'))
 })

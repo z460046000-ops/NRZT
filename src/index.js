@@ -11,6 +11,8 @@
  */
 
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { classify, extractBinaryText, ingestMaterials } from './ingest.js'
@@ -29,6 +31,7 @@ import { normalizeChart } from './chart.js'
 import { assignVisualDesign } from './visual-plan.js'
 import { addImageSuggestions, firstReaderWarnings, VOICE_FINGERPRINT_VERSION } from './first-reader.js'
 import { isUploadRequest, rememberFiles, recentFiles, startUpload, resumeUpload } from './upload-flow.js'
+import { skillExecutionFor, backendSkillInstruction, useSkillRegistryContext } from './skill-runtime.js'
 
 /** Cordis Loader 身份。 */
 export const name = 'wlyd-presales-solution'
@@ -94,13 +97,13 @@ function normalizeSolution(args) {
   const solution = sections.find(section => section.kind === 'solution')
   const combined = sections.find(section => section.kind === 'problem_solution')
   if (combined && (pains || solution)) throw bad('wlyd_solution', '合并的痛点—方案章不能与独立痛点/方案章重复')
-  if ((pains === undefined) !== (solution === undefined)) {
+  if (links.length && (pains === undefined) !== (solution === undefined) && !combined) {
     throw bad('wlyd_solution', '客户痛点与解决方案两章必须同时提供')
   }
   if (links.length && !combined && (!pains || !solution)) {
     throw bad('wlyd_solution', '有痛点—方案对应关系时须包含合并章，或同时包含独立痛点与方案章')
   }
-  if (pains && solution) {
+  if (pains && solution && pains.blocks.every(block => block.type === 'quote') && solution.blocks.every(block => block.type === 'quote')) {
     pains.blocks = links.length ? [{
       type: 'table', headers: ['编号', '客户痛点', '材料依据'],
       rows: links.map(link => [link.id, painWithBasis(link), `${link.painEvidence.path}：${link.painEvidence.quote}`]),
@@ -216,6 +219,10 @@ async function askInComposer(ctx, agent, signal, initial, config) {
     if (!answer) return outcome
     outcome = await (pending.stage.startsWith('upload-') ? resumeUpload(ctx, agent, signal, pending, answer, config)
       : resumePresales(ctx, agent, signal, pending, answer, config))
+    if (pending.deliveredText) {
+      outcome.text = `${pending.deliveredText}\n\n**附件同步**：${outcome.text}`
+      if (outcome.pending) outcome.pending.deliveredText = pending.deliveredText
+    }
     await savePending(agent, outcome.pending)
   }
   return outcome
@@ -240,7 +247,17 @@ function normalizeBlock(block, sIdx, bIdx) {
     case 'quote':
       if (!nonEmpty(block.text)) throw bad('wlyd_solution', `${where}.text 必须是非空字符串`)
       if (!isSafeDisplayText(block.text)) throw bad('wlyd_solution', `${where}.text 含代码或不可读字符，请提炼为可读文字`)
-      return { type, text: block.text.trim() }
+      if (type === 'quote') return { type, text: block.text.trim() }
+      const title = optStr(block.title, `${where}.title`)
+      const label = optStr(block.label, `${where}.label`)
+      if (title && (title.length > 24 || !isSafeDisplayText(title))) throw bad('wlyd_solution', `${where}.title 须为 24 字内可读短标题`)
+      if (label && (label.length > 12 || !isSafeDisplayText(label))) throw bad('wlyd_solution', `${where}.label 须为 12 字内可读标签`)
+      const emphasis = block.emphasis === undefined ? [] : strArray(block.emphasis, `${where}.emphasis`)
+      if (emphasis.length > 3 || emphasis.some(word => word.length < 2 || word.length > 16 || !block.text.includes(word))) {
+        throw bad('wlyd_solution', `${where}.emphasis 只允许正文中出现的 1—3 个重点词`)
+      }
+      return { type, text: block.text.trim(), ...(title ? { title } : {}), ...(label ? { label } : {}),
+        ...(emphasis.length ? { emphasis } : {}) }
     case 'bullets':
     case 'steps': {
       const items = strArray(block.items, `${where}.items`)
@@ -361,10 +378,8 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
       || block.type === 'metrics' && block.items?.some(item => substantive(item.value))
       || block.type === 'chart' && block.points?.length >= 2
   })).length
-  if (filled < Math.ceil(solution.sections.length / 2)) {
-    throw bad('wlyd_solution', filled === 0
-      ? '正文只有待确认占位文案，未生成交付文件；请检查材料与模型后重试'
-      : `只有 ${filled}/${solution.sections.length} 章有实际正文，未生成交付文件；请检查材料与模型后重试`)
+  if (filled === 0) {
+    throw bad('wlyd_solution', '正文只有待确认占位文案，未生成交付文件；请检查材料与模型后重试')
   }
   if (path.isAbsolute(base) || base.split(/[\\/]/u).includes('..') || base === '.' || base === '') {
     throw bad('wlyd_solution', 'output_base 必须是当前工作区内的相对路径')
@@ -373,6 +388,7 @@ async function persistSolution(ctx, exec, solution, { base, cwd, signal, assets,
   const assetsDirName = `${path.basename(base)}-assets`
 
   addImageSuggestions(solution)
+  solution.skillExecution = skillExecutionFor(exec.agent)
   solution.writingGuideVersion = VOICE_FINGERPRINT_VERSION
   warnings.push(...firstReaderWarnings(solution))
   const suggestionCount = solution.sections.flatMap(section => section.blocks)
@@ -494,18 +510,41 @@ async function preparePlatformFiles(ctx, exec, filesIn = [], tool, attachmentRef
   return { files, warnings }
 }
 
+/** 本轮附件直接成为生成材料；同步失败不会丢掉已生成的方案。 */
+export async function generateAttachedPresales(ctx, agent, signal, text, refs, source, config) {
+  const prepared = await preparePlatformFiles(ctx, { agent, signal }, [], '售前附件读取', refs)
+  const directory = `presales-runs/${Date.now()}-${randomUUID().slice(0, 8)}/materials`
+  for (const [index, file] of prepared.files.entries()) {
+    const target = await ctx.fs.resolve(`${directory}/${index + 1}-${file.name}`, {
+      cwd: agent.session?.header?.cwd ?? process.cwd(), signal,
+    })
+    await ctx.fs.writeText(target, file.content, undefined, signal)
+  }
+  const product = source?.product || path.basename(refs[0].name).replace(/\.[^.]+$/u, '')
+  const outcome = await runPresales(ctx, agent, signal, { kind: 'path', path: directory,
+    sales: { product, stage: source?.stage ?? 'initial', sourceSummary: `当前会话 ${prepared.files.length} 份附件` } }, config)
+  if (outcome.kind !== 'success') return outcome
+  const sync = await startUpload(ctx, agent, signal, text, refs, config)
+  return { ...outcome, text: `${outcome.text}\n\n**附件同步**：${sync.text}`
+    + (prepared.warnings.length ? `\n读取提示：${prepared.warnings.join('；')}` : ''),
+    ...(sync.pending ? { pending: { ...sync.pending, deliveredText: outcome.text } } : {}) }
+}
+
 export function apply(ctx, config) {
   // 同包提供原创售前幻灯片设计 Skill；确定性渲染仍由 renderHtml 执行。
   ctx.inject(['skills'], skillCtx => {
+    useSkillRegistryContext(ctx, skillCtx)
     for (const [name, description] of [
       ['wlyd-presales-copywriting', '撰写或润色售前方案；按事实、客户视角、短句及去 AI 套话标准表达，校对状态独立保存。'],
       ['wlyd-presales-html-ppt', '设计或复核售前 HTML 幻灯片；按内容选择整稿统一风格，保持层级、分页和图表可读。'],
       ['wlyd-presales-design-master', '售前方案设计判断：整稿统一风格，痛点深入讲解，方案重点讲做法，并按内容选择层级与页型。'],
+      ['wlyd-presales-huashu-design', '花叔 Design 的售前适配：真实素材、清楚层级、内容决定页型与逐页视觉复核。'],
     ]) {
       const raw = readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url), 'utf8')
       const content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, '')
       skillCtx.skills.register({ name, description, source: 'runtime',
-        invocation: { modelInvocable: true, userInvocable: true }, content })
+        invocation: { modelInvocable: true, userInvocable: true }, content,
+        resourceBase: { kind: 'directory', path: fileURLToPath(new URL(`../skills/${name}/`, import.meta.url)) } })
     }
   })
   const awaitingMaterial = new WeakSet()
@@ -531,8 +570,7 @@ export function apply(ctx, config) {
     const userMessage = decision.messages.findLast(message => message.source.kind === 'user')
     if (!userMessage) return decision
     const text = userMessage.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
-    const attached = decision.messages.filter(message => message.source.kind === 'user')
-      .flatMap(message => message.content.filter(block => block.type === 'file').map(block => block.attachment))
+    const attached = userMessage.content.filter(block => block.type === 'file').map(block => block.attachment)
     if (attached.length) await rememberFiles(agent, attached)
     if (agent.session?.id !== undefined) routedReplies.delete(String(agent.session.id))
     let pending = pendingDecision.get(agent)
@@ -540,7 +578,8 @@ export function apply(ctx, config) {
       pending = await loadPending(agent)
       if (pending) pendingDecision.set(agent, pending)
     }
-    const upload = isUploadRequest(text) || pending?.stage?.startsWith('upload-')
+    const withAttachments = attached.length && mentionsPresales(text) && !['path', 'cancel'].includes(materialSource(text)?.kind)
+    const upload = !withAttachments && (isUploadRequest(text) || pending?.stage?.startsWith('upload-'))
     if (!upload && !mentionsPresales(text) && !awaitingMaterial.has(agent) && !pending) return decision
     if (!upload && pending?.stage === 'draft-gaps' && !mentionsPresales(text)
       && !['search', 'note', 'cancel'].includes(directReplyIntent('evidence', text))) return decision
@@ -553,7 +592,8 @@ export function apply(ctx, config) {
     let run = agentRuns.get(userMessage.id)
     if (!run) {
       const source = materialSource(text)
-      const initial = upload
+      const initial = withAttachments ? generateAttachedPresales(ctx, agent, signal, text, attached, source, config)
+        : upload
         ? pending?.stage?.startsWith('upload-') && !isUploadRequest(text) && !attached.length
           ? resumeUpload(ctx, agent, signal, pending, text, config)
           : startUpload(ctx, agent, signal, text, attached.length ? attached : await recentFiles(agent), config)
@@ -674,15 +714,15 @@ export function apply(ctx, config) {
 
   ctx.tools.register({
     name: 'wlyd_solution',
-    description: '生成售前解决方案(标准化销售材料)。先向用户展示约 3—6 章大纲，接受修改并确认，再按确认顺序传入 sections；可参考的主题:'
+    description: '生成售前解决方案(标准化销售材料)。用户只给产品名或上传材料时直接生成有依据的初稿；明确要求调整结构时先展示约 3—6 章大纲，再按确认顺序传入 sections；可参考的主题:'
       + KIND_GUIDE.map(([k, g]) => `${k}=${g}`).join(';')
       + '。主题可合并/省略。每节提供 heading(页面标题)、lead(一页导语)与 blocks 内容；'
-      + '合并客户问题和方案时 kind=problem_solution，分别呈现时用 pains/solution。内容块类型:para{text}段落、bullets{items[]}要点卡、'
+      + '合并客户问题和方案时 kind=problem_solution，分别呈现时用 pains/solution。内容块类型:para{label,title,text,emphasis[]}短标题与具体说明卡片、bullets{items[]}要点卡、'
       + 'steps{items[]}流程步骤、table{headers[],rows[][]}表格(实施路径/对比首选)、'
       + 'image{path,caption}配图(path 为材料中的图片路径)、quote{text}金句/提示、'
       + 'metrics{items:[{label,value}]}数值亮点；chart{chartType:"bar|line",title,unit,points:[{label,value}],source:{path,quote}}有原文依据的比较或趋势图。图表数值和标签必须出现在同一段原文；'
       + '必须提供 pain_solution_links,每条痛点有唯一编号、对应解决办法和两侧的材料原文依据；'
-      + '工具会按该映射重建独立 pains/solution 章或在合并章中呈现对应关系，防止前后不一致。证据不足时传空数组，相关内容标待确认。'
+      + '工具保留独立痛点章的深入解释，在后续方案章呈现对应关系。证据不足时传空数组，缺少内容交给对话补充，不生成占位页。'
       + '材料未覆盖的信息用保守表述,并放入 boundary 的限制中。'
       + '所有面客正文基于可核对事实写短句；标题只讲一个判断，先说客户情况再说产品做法，避免无依据的 AI 套话；简短不能牺牲来源与适用边界。'
       + '同时输出三份文件:.md(可编辑事实源)、.html(集团模板幻灯片风格,浏览器查看、'
@@ -718,6 +758,8 @@ export function apply(ctx, config) {
                 properties: {
                   type: { type: 'string', required: true, enum: BLOCK_TYPES },
                   text: { type: 'string' },
+                  label: { type: 'string', description: '段落的可选短类别标签，12 字以内' },
+                  emphasis: { type: 'array', items: { type: 'string' }, description: '正文中已有的最多三个重点词' },
                   items: { type: 'array', items: {} },
                   headers: { type: 'array', items: { type: 'string' } },
                   rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
@@ -986,7 +1028,7 @@ export function apply(ctx, config) {
       const approved = headings.map((heading, i) => `${i + 1}. ${heading.trim()}`).join('\n')
       const result = await generateSolution(cfg, {
         projectId: args.project_id.trim(),
-        instruction: `${OUTLINE_INSTRUCTION}\n严格按以下章节标题和顺序输出，不增加或删除章节：\n${approved}`
+        instruction: `${OUTLINE_INSTRUCTION}\n${await backendSkillInstruction()}\n严格按以下章节标题和顺序输出，不增加或删除章节：\n${approved}`
           + (nonEmpty(args.instruction) ? `\n其他要求：${args.instruction.trim()}` : ''),
         signal: exec.signal,
       })

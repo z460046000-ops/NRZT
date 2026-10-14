@@ -109,10 +109,14 @@ function applyChange(solution, change) {
   const block = solution.sections.flatMap(s => s.blocks).find(b => b.id === parts[1])
   if (!block) throw new EditorError(400, '内容块不存在')
   if (solution.painSolutionLinks?.length && solution.sections.some(s =>
-    (s.kind === 'pains' || s.kind === 'solution') && s.blocks.some(item => item.id === block.id))) {
+    (s.kind === 'pains' || s.kind === 'solution') && s.blocks.length === 1 && s.blocks[0].type === 'table' && s.blocks.some(item => item.id === block.id))) {
     throw new EditorError(400, '请在痛点与解决方案配对区修改此内容')
   }
-  if (parts.length === 3 && parts[2] === 'text' && ['para', 'quote'].includes(block.type)) {
+  if (parts.length === 3 && ['title', 'label'].includes(parts[2]) && block.type === 'para') {
+    const text = required(value, '短标题或类别')
+    if (text.length > (parts[2] === 'title' ? 24 : 12)) throw new EditorError(400, '短标题或类别过长')
+    block[parts[2]] = text
+  } else if (parts.length === 3 && parts[2] === 'text' && ['para', 'quote'].includes(block.type)) {
     block.text = required(value, '正文')
   } else if (parts.length === 3 && parts[2] === 'caption' && block.type === 'image') {
     block.caption = optional(value, '图片说明')
@@ -158,11 +162,11 @@ function syncPairs(solution) {
   const links = solution.painSolutionLinks ?? []
   if (!links.length) return
   for (const section of solution.sections) {
-    if (section.kind === 'pains') section.blocks = [{
+    if (section.kind === 'pains' && section.blocks.length === 1 && section.blocks[0].type === 'table') section.blocks = [{
       id: section.blocks[0]?.id ?? randomUUID(), type: 'table', headers: ['编号', '客户痛点', '材料依据'],
       rows: links.map(link => [link.id, link.pain, `${link.painEvidence.path}：${link.painEvidence.quote}`]),
     }]
-    if (section.kind === 'solution') section.blocks = [{
+    if (section.kind === 'solution' && section.blocks.length === 1 && section.blocks[0].type === 'table') section.blocks = [{
       id: section.blocks[0]?.id ?? randomUUID(), type: 'table', headers: ['对应痛点', '解决办法', '材料依据'],
       rows: links.map(link => [link.id, link.solution, `${link.solutionEvidence.path}：${link.solutionEvidence.quote}`]),
     }]

@@ -63,6 +63,17 @@ test('模型大纲按节抢救：标题保留、无效来源只过滤路径、�
   assert.deepEqual(suggestOutline(manifest, links, candidate.map((s, i) => ({ ...s, heading: `${i + 1}. ${s.heading}` }))).map(s => s.heading), candidate.map(s => s.heading))
 })
 
+test('单份本地材料的大纲漏写 sourceIds 时仍继承真实来源', () => {
+  const single = { files: [{ path: 'product.md', excerpt: '产品面向销售团队，支持统一管理客户咨询。' }] }
+  const candidate = [
+    { heading: '业务背景', topics: ['context'] },
+    { heading: '典型问题', topics: ['problem_solution'] },
+    { heading: '产品能力', topics: ['capabilities'] },
+  ]
+  assert.ok(suggestOutline(single, [], candidate).every(section =>
+    section.sourcePaths.length === 1 && section.sourcePaths[0] === 'product.md'))
+})
+
 test('候选大纲缺痛点方案章时自动补齐，材料化标题不被模板覆盖', () => {
   const candidate = [
     { heading: '通话质检的现状与挑战', topics: ['problem_solution'], sourcePaths: ['a.md'] },
@@ -121,6 +132,20 @@ test('合并章节的 P1 对应关系同时进入 HTML、Markdown 和 DOCX', asy
   assert.match(html, /资料分散/)
   assert.match(markdown, /\| P1 \| 资料分散 \| 统一资料管理 \|/)
   assert.equal(docx.subarray(0, 2).toString(), 'PK')
+})
+
+test('长来源路径不会把问题与方案拆出空白续页', () => {
+  const outline = suggestOutline(manifest, links)
+  const longPath = `内容中台/${'CallWan-产品知识库资料-'.repeat(8)}.md`
+  const solution = { title: '示例方案', meta: { company: '示例企业' }, theme: 'corporate',
+    sections: sectionsFromOutline(manifest, outline, links), painSolutionLinks: links.map(link => ({
+      ...link, painEvidence: { ...link.painEvidence, path: longPath },
+      solutionEvidence: { ...link.solutionEvidence, path: longPath },
+    })) }
+  const html = renderHtml(solution, [])
+  assert.equal((html.match(/class="pair-map"/gu) ?? []).length, 1)
+  assert.equal((html.match(/class="slide linked-slide /gu) ?? []).length, 1)
+  assert.doesNotMatch(html, /客户挑战（续）/u)
 })
 
 test('平台生成工具缺少确认大纲时拒绝启动', async () => {

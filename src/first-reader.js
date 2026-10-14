@@ -1,5 +1,5 @@
 /** Give first-time readers a concrete opening and give editors useful image slots. */
-export const VOICE_FINGERPRINT_VERSION = 'observed-callwan-20261013'
+export const VOICE_FINGERPRINT_VERSION = 'observed-callwan-20261013-v2'
 
 const VISUAL_KINDS = {
   architecture: { kind: 'diagram', label: '方案关系图', instruction: '按本页已确认内容画清业务环节与对应做法；不要增加未出现的能力或数字。' },
@@ -24,23 +24,19 @@ function focusOf(section) {
 /** Suggestions are internal image blocks, so the existing editor can replace them. */
 export function addImageSuggestions(solution) {
   if (solution.external) return solution
-  let count = 0
-  const used = new Set()
   for (const [index, section] of solution.sections.entries()) {
-    if (count >= 2) break
-    const config = VISUAL_KINDS[section.kind]
-    if (!config || used.has(config.kind) || !section.blocks.some(substantive)
+    const byHeading = /平台|产品|界面|功能|操作|线索|发布|素材|知识库/u.test(section.heading)
+      && !/痛点|挑战|困境|趋势|环境|公司/u.test(section.heading) ? VISUAL_KINDS.capabilities : undefined
+    const config = VISUAL_KINDS[section.kind] ?? byHeading
+    if (!config || !section.blocks.some(substantive)
       || section.blocks.some(block => block.type === 'image')) continue
     const focus = focusOf(section)
     const suggestion = { id: `suggested-image-${section.id ?? index}`, type: 'image', path: '',
       caption: `${section.heading}：${config.label}`,
       visualSuggestion: { kind: config.kind, label: config.label, focus,
         instruction: config.instruction } }
-    const firstEvidence = section.blocks.findIndex(block => block.type === 'quote' && /^来源[:：]/u.test(block.text))
-    const insertAt = firstEvidence >= 0 ? firstEvidence + 1 : Math.min(1, section.blocks.length)
+    const insertAt = section.blocks.length
     section.blocks.splice(insertAt, 0, suggestion)
-    used.add(config.kind)
-    count += 1
   }
   return solution
 }

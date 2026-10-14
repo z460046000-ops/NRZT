@@ -90,6 +90,7 @@ test('直接生成工具拒绝代码正文和证据引文', async () => {
   const registered = new Map()
   apply({
     inject() {}, on() {},
+    fs: { resolve: async () => { throw new Error('accepted-partial-draft') } },
     tools: { register(tool) { registered.set(tool.name, tool) } },
   }, {})
   const tool = registered.get('wlyd_solution')
@@ -114,5 +115,5 @@ test('直接生成工具拒绝代码正文和证据引文', async () => {
     { ...base.sections[0] },
     ...['场景', '实施', '边界'].map(heading => ({ kind: 'custom', heading,
       blocks: [{ type: 'para', text: '待与贵方确认：本部分内容将在进一步沟通并核对资料后完善。' }] })),
-  ] }, exec), /只有 1\/4 章有实际正文/)
+  ] }, exec), /accepted-partial-draft/)
 })

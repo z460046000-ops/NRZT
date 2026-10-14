@@ -277,7 +277,9 @@ test('只说 CallWan 售前方案：自动读取匹配知识库并直接生成�
   assert.equal(outcome.kind, 'success', outcome.text)
   assert.deepEqual(tools.calls, ['wlyd_solution'])
   assert.match(outcome.text, /内容中台/)
-  assert.ok(generated.sections.some(section => /挑战|问题/u.test(section.heading)))
+  assert.ok(generated.sections.length > 0)
+  assert.ok(generated.sections.every(section => section.blocks.some(block => block.type === 'para' && !/待与贵方确认/u.test(block.text))))
+  assert.match(outcome.text, /本版仍需补充/u)
   assert.ok(generated.sections.every(section => !/接口|Swagger|API/iu.test(section.heading)))
 })
 
@@ -303,7 +305,9 @@ test('匹配知识库暂不可读时自动查公开资料并直接生成待核�
   assert.deepEqual(tools.calls, ['web_search', 'wlyd_solution'])
   assert.match(outcome.text, /公开网页摘要（待核实）/)
   assert.equal(generated.pain_solution_links.length, 0)
-  assert.ok(generated.sections.some(section => /挑战|问题/u.test(section.heading)))
+  assert.ok(generated.sections.length > 0)
+  assert.ok(generated.sections.every(section => section.blocks.some(block => block.type === 'para' && !/待与贵方确认/u.test(block.text))))
+  assert.match(outcome.text, /本版仍需补充/u)
 })
 
 test('知识库已读到材料但组稿失败时保留原错误，不改用单条公开摘要', async () => {

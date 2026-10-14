@@ -98,6 +98,8 @@ export async function renderDocx(solution, assets) {
 function pushBlock(children, block, assetByName) {
   switch (block.type) {
     case 'para':
+      if (block.label) children.push(new Paragraph({ children: [new TextRun({ text: block.label, bold: true, size: 20 })] }))
+      if (block.title) children.push(new Paragraph({ text: block.title, heading: HeadingLevel.HEADING_2 }))
       children.push(new Paragraph({ text: block.text }))
       break
     case 'bullets':

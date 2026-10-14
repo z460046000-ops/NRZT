@@ -10,6 +10,7 @@ import { isPainSection, relationSectionIndex } from './section-role.js'
 import { readFileSync } from 'node:fs'
 import { painBasisLabel } from './pain-basis.js'
 import { iconForText, semanticIcon } from './visual-language.js'
+import { DESIGN_PALETTES } from './visual-plan.js'
 
 const EDITOR_SCRIPT = readFileSync(new URL('./editor-client.js', import.meta.url), 'utf8')
 const RELEASE_SCRIPT = readFileSync(new URL('./release-client.js', import.meta.url), 'utf8')
@@ -63,9 +64,13 @@ function esc(text) {
 }
 
 /** 标记只作用于编辑预览；文本及来源仍经 esc 转义。 */
-function reviewText(value, path, source) {
+function reviewText(value, path, source, emphasis = []) {
   const item = source.copyReview?.find(item => item.path === path && item.status === 'pending')
-  const text = esc(value ?? '')
+  const words = emphasis.filter(word => typeof word === 'string' && word.length >= 2 && String(value ?? '').includes(word))
+  const pattern = words.length ? new RegExp(`(${words.sort((a, b) => b.length - a.length)
+    .map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('|')})`, 'gu') : null
+  const text = pattern ? String(value ?? '').split(pattern).map(part => words.includes(part)
+    ? `<strong class="copy-emphasis">${esc(part)}</strong>` : esc(part)).join('') : esc(value ?? '')
   if (!source.editorId || !item) return text
   return `<span class="copy-review${text ? '' : ' copy-review-empty'}" role="button" tabindex="0" data-edit-path="${esc(path)}" aria-label="编辑并校对此处内容" title="点击编辑并校对">${text || '点击补充内容'}</span>`
 }
@@ -75,7 +80,7 @@ function reviewText(value, path, source) {
 /** 按文字量估算版心占用；超长内容先拆块，再分页。 */
 function blockWeight(block) {
   switch (block.type) {
-    case 'para': return 1 + String(block.text).length / 95
+    case 'para': return (block.title ? 1.6 : 1) + String(block.text).length / 95
     case 'bullets': return 1.5 + block.items.reduce((sum, item) => sum + Math.max(1, String(item).length / 65), 0)
     case 'steps': return 1.5 + block.items.reduce((sum, item) => sum + Math.max(1, String(item).length / 90), 0)
     case 'table': return 2 + block.rows.reduce((sum, row) => sum + Math.max(1, row.join('').length / 80), 0)
@@ -174,8 +179,9 @@ function paginateBlocks(blocks) {
   let used = 0
   const pushPage = () => { if (current.length > 0) { pages.push(current); current = []; used = 0 } }
   for (const block of blocks.flatMap(splitBlock)) {
+    const evidence = block.type === 'quote' && block.text.startsWith('来源：')
     const w = blockWeight(block)
-    if (used + w > PAGE_CAPACITY && current.length > 0) pushPage()
+    if (!evidence && used + w > PAGE_CAPACITY && current.length > 0) pushPage()
     current.push(block)
     used += w
   }
@@ -188,6 +194,7 @@ function paginateBlocks(blocks) {
 function renderBlock(block, assetByName, features, sectionKind = '') {
   switch (block.type) {
     case 'para':
+      if (block.title) return `<article class="argument-card">${block.label ? `<p class="argument-label">${reviewText(block.label, `blocks/${block.id}/label`, features.source)}</p>` : ''}<h3>${reviewText(block.title, `blocks/${block.id}/title`, features.source)}</h3><p>${reviewText(block.text, `blocks/${block.id}/text`, features.source, block.emphasis ?? [])}</p></article>`
       return `<p class="para${/^来源[:：]/u.test(block.text) ? ' source-evidence' : ''}">${reviewText(block.text, `blocks/${block.id}/text`, features.source)}</p>`
     case 'bullets':
       if (['capabilities', 'scenarios'].includes(sectionKind) && block.items.length >= 3
@@ -224,7 +231,7 @@ function renderBlock(block, assetByName, features, sectionKind = '') {
       if (!asset && block.visualSuggestion && !features.source.external) {
         features.hasImage = true
         const hint = block.visualSuggestion
-        return `<figure class="visual visual-placeholder"><div class="frame"><div class="visual-placeholder-copy"><span>内部配图位置 · ${esc(hint.label)}</span><strong>${esc(hint.focus)}</strong><p>${esc(hint.instruction)}</p></div></div><em>${reviewText(block.caption ?? '', `blocks/${block.id}/caption`, features.source)}</em></figure>`
+        return `<figure class="visual visual-placeholder"><div class="frame"><div class="visual-placeholder-copy"><span>内部配图位置 · ${esc(hint.label)}</span><strong>${esc(hint.focus)}</strong><p>${esc(hint.instruction)}</p>${features.source.editorId ? `<button type="button" class="image-slot-action" data-edit-path="blocks/${esc(block.id)}/caption">上传真实图片</button>` : '<p>在 DSH 中打开编辑链接后可上传替换。</p>'}</div></div><em>${reviewText(block.caption ?? '', `blocks/${block.id}/caption`, features.source)}</em></figure>`
       }
       if (!asset) return ''
       features.hasImage = true
@@ -368,6 +375,8 @@ function dividerSlide(solution, section, no, t) {
 }
 
 function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
+  if (blocks.some(block => block.type === 'para' && block.title)
+    && blocks.every(block => block.type === 'para' || block.type === 'quote' && block.text.startsWith('来源：'))) return 'arguments'
   if (challengeParts(section, blocks)) return 'challenge-summary'
   if (narrativePage(blocks, section)) return 'narrative'
   const types = blocks.flatMap(block => block.kind === 'cards' ? block.items.map(item => item.type) : [block.type])
@@ -447,11 +456,17 @@ function layoutFor(solution, section, blocks, pageIndex, recentLayouts) {
 
 function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName, features, layout) {
   const narrative = layout === 'narrative'
+  const argumentsPage = layout === 'arguments'
   const challenge = layout === 'challenge-summary' ? challengeParts(section, blocks) : null
-  const statement = !challenge && blocks.length <= 2 && blocks[0]?.type === 'para'
+  const statement = !argumentsPage && !challenge && blocks.length <= 2 && blocks[0]?.type === 'para'
     && String(blocks[0].text).length <= 48
     && (blocks.length === 1 || blocks[1]?.type === 'quote')
-  const body = challenge ? renderChallengeSummary(blocks, challenge, assetByName, features, section)
+  const body = argumentsPage ? blocks.reduce((cards, block) => {
+    if (block.type === 'para') cards.push([block])
+    else if (cards.length) cards.at(-1).push(block)
+    return cards
+  }, []).map(card => `<div class="argument-group">${card.map(block => renderBlock(block, assetByName, features, section.kind)).join('')}</div>`).join('')
+    : challenge ? renderChallengeSummary(blocks, challenge, assetByName, features, section)
     : narrative ? renderNarrativeItems(blocks, section, assetByName, features) : blocks.map(group => {
     if (group.kind === 'cards') {
       return `<div class="grid g${group.cols}">${group.items.map(b => renderCard(b, assetByName, features, section.kind)).join('')}</div>`
@@ -471,7 +486,7 @@ function contentSlide(solution, section, pageNo, pageIndex, blocks, assetByName,
   return `<section class="slide content-slide${statement ? ' statement-slide' : ''}${visual} layout-${layout}">
   <div class="header"><div class="tag">${esc(tag)}</div></div>
   <div class="head"><h2 style="font-size:${narrative ? 40 : headingSize}px">${reviewText(displayHeading + continuation, `sections/${section.id}/heading`, solution)}</h2>${section.lead && !narrative && !challenge ? `<p class="lead">${reviewText(section.lead, `sections/${section.id}/lead`, solution)}</p>` : ''}</div>
-  <div class="body"${gap}>
+  <div class="body"${argumentsPage ? ` style="--argument-columns:${Math.min(3, blocks.filter(block => block.type === 'para').length)}"` : gap}>
 ${body}
   </div>
   <div class="footer"><span class="brand">${esc(solution.meta.company ?? '')}</span><span></span></div>
@@ -480,18 +495,12 @@ ${body}
 
 function paginateLink(link) {
   const fields = ['pain', 'solution']
-  const evidence = ['painEvidence', 'solutionEvidence']
   const parts = Object.fromEntries(fields.map(field => [field, splitText(link[field], 120)]))
-  for (const field of evidence) {
-    parts[`${field}Path`] = splitText(link[field]?.path ?? '', 95)
-    parts[`${field}Quote`] = splitText(link[field]?.quote ?? '', 120)
-  }
-  const count = Math.max(...Object.values(parts).map(value => value.length))
+  // 来源是当前观点的附注，不能因为路径或引文较长而新建一页空观点。
+  const count = Math.max(parts.pain.length, parts.solution.length)
   return Array.from({ length: count }, (_, i) => ({
     ...link,
     pain: parts.pain[i] ?? '', solution: parts.solution[i] ?? '',
-    painEvidence: { ...link.painEvidence, path: parts.painEvidencePath[i] ?? '', quote: parts.painEvidenceQuote[i] ?? '' },
-    solutionEvidence: { ...link.solutionEvidence, path: parts.solutionEvidencePath[i] ?? '', quote: parts.solutionEvidenceQuote[i] ?? '' },
     continued: i > 0,
   }))
 }
@@ -545,7 +554,14 @@ export function renderHtml(solution, assets, options = {}) {
   solution = customerFacingSolution(solution)
   const preview = options.externalPreview
   if (preview) solution = { ...solution, editorId: preview.editorId, copyReview: options.copyReview ?? [] }
-  const t = THEMES[solution.theme] ?? THEMES.corporate
+  const baseTheme = THEMES[solution.theme] ?? THEMES.corporate
+  const palette = DESIGN_PALETTES[solution.visualDesign?.palette]
+  const t = palette ? { ...baseTheme, red: palette.accent, blue: palette.accent,
+    blueDark: palette.dark ? palette.accent : palette.cover, cardTint: palette.tint,
+    coverFrom: palette.cover, coverTo: palette.cover, coverInk: '#ffffff',
+    dividerFrom: palette.cover, dividerTo: palette.cover, dividerInk: '#ffffff',
+    closingFrom: palette.cover, closingTo: palette.cover, closingInk: '#ffffff',
+    heroMuted: '#e0e7e4' } : baseTheme
   const designDirection = ['redline', 'paper', 'night', 'signal'].includes(solution.visualDesign?.direction)
     ? solution.visualDesign.direction : ''
   const assetByName = new Map(assets.map(a => [a.sourcePath, a]))
@@ -589,8 +605,6 @@ export function renderHtml(solution, assets, options = {}) {
   const sourceToggleScript = solution.external && !preview ? '' : `
   const sourceToggle = document.getElementById('source-toggle');
   if (sourceToggle) sourceToggle.addEventListener('click', () => {
-    if (document.body.hasAttribute('data-revision')) { location.href = 'solution.html' + location.search; return; }
-    if (document.body.hasAttribute('data-editor-id')) { location.href = 'external-preview.html' + location.search; return; }
     const hidden = document.body.classList.toggle('sources-hidden');
     sourceToggle.textContent = hidden ? '显示来源' : '隐藏来源';
     sourceToggle.setAttribute('aria-pressed', String(hidden));
@@ -610,7 +624,7 @@ ${cssFor(t, features)}
 <main class="deck">
 ${slides.join('\n')}
 </main>
-<nav class="deck-controls" aria-label="幻灯片控制"><button type="button" id="prev-slide" aria-label="上一页">上一页</button><span id="slide-count">纵向浏览</span><button type="button" id="next-slide" aria-label="下一页">下一页</button>${preview ? '<button type="button" id="source-toggle">返回内部稿</button>' : solution.external ? '' : `<button type="button" id="source-toggle" aria-pressed="false">${solution.editorId ? '查看外部稿' : '隐藏来源'}</button>`}${solution.editorId ? '<button type="button" id="edit-toggle" class="edit-toggle">编辑方案</button>' : ''}</nav>
+<nav class="deck-controls" aria-label="幻灯片控制"><button type="button" id="prev-slide" aria-label="上一页">上一页</button><span id="slide-count">纵向浏览</span><button type="button" id="next-slide" aria-label="下一页">下一页</button>${preview ? '<a href="solution.html">返回内部稿</a>' : solution.external ? '' : '<button type="button" id="source-toggle" aria-pressed="false">隐藏来源</button>'}${solution.editorId && !preview ? '<a href="external-preview.html">外部稿预览</a>' : ''}${solution.editorId ? '<button type="button" id="edit-toggle" class="edit-toggle">编辑方案</button>' : ''}</nav>
 ${preview ? `<aside class="release-panel" id="release-panel"><strong>外部稿预览 · 尚未批准外发</strong><p>确认内容、受众和授权后，才能生成可下载的外发文件。规则版本 ${esc(preview.policyVersion)}</p><button type="button" id="release-open">外发检查</button><div id="release-fields" hidden><label>结构已确认 <input id="release-structure" type="checkbox"></label><label>口径 <select id="release-stance"><option value="">请选择</option><option value="verified">已验证事实</option><option value="planned">以规划为主</option><option value="mixed">两者混合</option></select></label><label>目标受众 <input id="release-audience" type="text" placeholder="角色与关注点"></label><label>分发范围 <select id="release-distribution"><option value="">请选择</option><option value="partner">外部合作方</option><option value="public">可公开</option></select></label><label>事实基线已核对 <input id="release-facts" type="checkbox"></label><label>版本 <input id="release-version" type="text" placeholder="例如 V1.0"></label><label>确认人 <input id="release-reviewer" type="text" placeholder="填写姓名，仅留在内部记录"></label><label>客户名称、案例、指标与图片授权已检查 <input id="release-assets" type="checkbox"></label><label>价格、折扣和服务承诺已核对 <input id="release-commercial" type="checkbox"></label><label>强声明已有事实支撑 <input id="release-claims" type="checkbox"></label><fieldset class="release-checklist"><legend>外发前逐项检查</legend><label>无内部残留 <input id="release-no-internal" type="checkbox"></label><label>无未批准内容 <input id="release-approved" type="checkbox"></label><label>规划内容已标状态 <input id="release-planning" type="checkbox"></label><label>商务、责任、风险边界可见 <input id="release-boundaries" type="checkbox"></label><label>无生成痕迹与占位符 <input id="release-no-automation" type="checkbox"></label><label>目录、标题、引用一致 <input id="release-structure-consistent" type="checkbox"></label><label>名称、版本、日期一致 <input id="release-version-consistent" type="checkbox"></label><label>声明强度未升级 <input id="release-strength" type="checkbox"></label><label>问题、方案、价值与必要论证完整 <input id="release-causal-chain" type="checkbox"></label></fieldset><button type="button" id="release-confirm-all">勾选全部核对项</button><button type="button" id="release-submit">检查并生成外发文件</button><div id="release-result" role="status"></div></div></aside>` : ''}
 ${solution.editorId ? `<aside id="editor-panel" class="editor-panel" aria-label="编辑方案" hidden>
   <header class="editor-header"><div><strong>编辑方案</strong><span>修改将生成新版本</span></div><button type="button" id="editor-close" aria-label="关闭编辑区">关闭</button></header>
@@ -831,6 +845,20 @@ body.single-slide .slide{display:none}
 body.single-slide .slide.preview-active{display:block;margin:0;box-shadow:none}
 body.single-slide .slide.closing.preview-active{display:flex}
 @media print{body.single-slide{display:block!important;min-height:0;background:#fff}body.single-slide .slide{display:block}body.single-slide .slide.closing{display:flex}}
+/* 结构化观点：短标题、具体说明与重点词，同一版心。 */
+.layout-arguments .body{display:grid;grid-template-columns:repeat(var(--argument-columns,2),minmax(0,1fr));align-content:start;gap:24px;padding-top:28px}
+.argument-group{min-width:0;display:flex;flex-direction:column;gap:16px}
+.argument-card{min-width:0;background:var(--tint);padding:28px 30px;border:1px solid var(--line);border-radius:12px;flex:1}
+.argument-card .argument-label{font-size:16px;line-height:1.4;font-weight:700;color:var(--red);margin:0 0 12px}
+.argument-card h3{font-size:29px;font-weight:750;line-height:1.28;letter-spacing:-.025em;max-width:100%;text-wrap:balance}
+.argument-card>p:not(.argument-label){margin-top:20px;font-size:18px;line-height:1.65;font-weight:400;color:var(--ink2);overflow-wrap:anywhere;max-width:65ch}
+.copy-emphasis{color:var(--red);font-weight:750}
+.image-slot-action{margin-top:20px;padding:12px 18px;border:1px solid var(--red);border-radius:8px;background:var(--red);color:var(--editor-action-text);font:inherit;cursor:pointer}
+.image-slot-action:focus-visible{outline:3px solid var(--blue);outline-offset:4px}
+.deck-controls a{color:var(--ink);padding:10px 14px;border:1px solid var(--line);background:var(--slide);border-radius:8px;text-decoration:none;font-size:14px;min-height:44px;display:inline-flex;align-items:center}
+.deck-controls a:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.sources-hidden .layout-statement-right .body,.sources-hidden .layout-editorial-led .body{grid-template-columns:minmax(0,1fr)}
+.sources-hidden .layout-editorial-led .body>.para,.sources-hidden .layout-statement-right .body>.para{grid-column:1/-1;max-width:none}
 /* 售前页型：用内容关系决定版式，字体角色和图形只服务于阅读顺序。 */
 .cover::after{display:none}
 .cover-top{top:42px;left:76px;right:76px;padding-bottom:18px;border-bottom:1px solid color-mix(in srgb,var(--hero-ink) 25%,transparent);color:var(--hero-muted);font-size:14px;letter-spacing:0}
@@ -1090,10 +1118,10 @@ body.single-slide .slide.closing.preview-active{display:flex}
 .design-night .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
 .design-night .layout-editorial-band .body>.card{border-left-color:var(--blue)}
 .design-signal{--hero-ink:#fff;--feature-ink:#fff;--feature-muted:#c6d9ed}
-.design-signal .cover,.design-signal .divider:not(.divider-light),.design-signal .closing{background:#0e365f;color:var(--hero-ink)}
+.design-signal .cover,.design-signal .divider:not(.divider-light),.design-signal .closing{background:${t.coverFrom};color:var(--hero-ink)}
 .design-signal .cover-geometry::before,.design-signal .cover-geometry span:nth-child(2){background:var(--hero-ink)}
 .design-signal .content-slide .head::after,.design-signal .linked-slide .head::after{width:112px;height:3px;background:var(--blue)}
-.design-signal .layout-editorial-feature .body>.card,.design-signal .layout-process-track,.design-signal .relation-alternate{background:#0e365f}
+.design-signal .layout-editorial-feature .body>.card,.design-signal .layout-process-track,.design-signal .relation-alternate{background:var(--feature-bg)}
 .design-signal .layout-editorial-columns .body>.para:first-child{border-bottom-color:var(--blue)}
 .design-signal .layout-editorial-columns .body>.para:nth-child(3){border-left-color:var(--blue)}
 .design-signal .layout-editorial-band .body>.card{border-left-color:var(--blue)}

@@ -5,9 +5,12 @@ import { salesOutlineCandidate, salesScenario, sourcePriority, technicalHeading 
 import { normalizeChart } from './chart.js'
 import { cleanMaterialText, isReadableProse, isSafeDisplayText } from './source-quality.js'
 import { hasInternalCopy } from './customer-copy.js'
+import { loadPresalesSkills } from './skill-runtime.js'
 
 const MAX_SOURCE_CHARS = 24_000
 const MAX_LINKS = 5
+const MODEL_TIMEOUT_MS = { 'draft-all': 240_000, 'draft-section': 90_000 }
+const DEFAULT_MODEL_TIMEOUT_MS = 90_000
 const FALLBACK_QUESTION = '现有材料还不足以确认客户痛点与对应的产品解决办法。可以补充“客户遇到什么问题、产品怎样解决”；也可以说“帮我网上找找公开资料”（即检索公开资料，结果标待核实）、“先按现有材料出大纲”（标待确认继续）或“停止”。'
 
 function sourcesFromCorpus(corpus, manifest) {
@@ -60,12 +63,18 @@ function sectionEvidencePaths(item, manifest) {
   return paths.filter(sourcePath => !publicPaths.has(sourcePath))
 }
 
-function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases = new Map()) {
+function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases = new Map(), evidence = new Map()) {
   const proposed = Array.isArray(candidate?.blocks) ? candidate.blocks : candidate?.paragraphs
   if (!Array.isArray(proposed)) return section
   const blocks = proposed.slice(0, 5).flatMap(raw => {
     if (!raw || typeof raw !== 'object') return []
     const block = { ...raw, path: raw.path ?? aliases.get(raw.sourceId) }
+    if (raw.evidenceId) {
+      const anchor = evidence.get(raw.evidenceId)
+      if (!anchor || block.path && anchor.path !== block.path) return []
+      block.path = anchor.path
+      block.quote = anchor.text
+    }
     if (!validEvidence(block, sources) || !sourcePaths.includes(block.path)
       || !isReadableProse(block.quote)) return []
     const type = block.type ?? 'para'
@@ -96,7 +105,14 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
     let body
     if (type === 'para' && typeof block.text === 'string' && isReadableProse(block.text)
       && !hasInternalCopy(block.text) && block.text.length <= 1200) {
-      body = { type, text: block.text.trim() }
+      const title = typeof block.title === 'string' && block.title.trim().length <= 24
+        && isReadableProse(block.title) && !hasInternalCopy(block.title) ? block.title.trim() : undefined
+      const label = typeof block.label === 'string' && block.label.trim().length <= 12
+        && isReadableProse(block.label) && !hasInternalCopy(block.label) ? block.label.trim() : undefined
+      const emphasis = Array.isArray(block.emphasis) ? block.emphasis.filter(word =>
+        typeof word === 'string' && word.length >= 2 && word.length <= 16 && block.text.includes(word)).slice(0, 3) : []
+      body = { type, text: block.text.trim(), ...(title ? { title } : {}), ...(label ? { label } : {}),
+        ...(emphasis.length ? { emphasis } : {}) }
     } else if (['bullets', 'steps'].includes(type) && Array.isArray(block.items)
       && block.items.length >= 2 && block.items.length <= 6
       && block.items.every(item => isReadableProse(item) && !hasInternalCopy(item) && item.length <= 180)) {
@@ -110,17 +126,89 @@ function sectionFromCandidate(candidate, section, sourcePaths, sources, aliases 
   return blocks.length ? { ...section, ...(lead ? { lead } : {}), blocks } : section
 }
 
+/** 只记录结构与校验结果，不把客户材料或模型正文写入日志。 */
+function rejectedSectionMeta(candidate, sourcePaths, sources, aliases, evidence) {
+  const proposed = Array.isArray(candidate?.blocks) ? candidate.blocks : candidate?.paragraphs
+  return { shape: Array.isArray(proposed) ? 'blocks' : typeof proposed,
+    count: Array.isArray(proposed) ? proposed.length : 0, allowedSources: sourcePaths.length,
+    blocks: (Array.isArray(proposed) ? proposed : []).slice(0, 5).map(raw => {
+      const anchor = evidence.get(raw?.evidenceId)
+      const path = raw?.path ?? aliases.get(raw?.sourceId) ?? anchor?.path
+      const quote = anchor?.text ?? raw?.quote
+      return { type: raw?.type, keys: raw && typeof raw === 'object' ? Object.keys(raw) : [],
+        evidenceIdFound: !!anchor, pathKnown: !!path && sources.has(path),
+        pathAllowed: !!path && sourcePaths.includes(path),
+        quoteExact: typeof quote === 'string' && !!path && !!sources.get(path)?.includes(quote.trim()),
+        quoteReadable: isReadableProse(quote) }
+    }) }
+}
+
+const EXTRACT_TERMS = {
+  context: /面向|用于|目标|背景|定位|服务|客户|团队/u,
+  trends: /变化|趋势|正在|增长|市场|环境/u,
+  problem_solution: /问题|困难|难以|分散|漏|重复|割裂|不足|压力|耗时/u,
+  capabilities: /提供|支持|实现|汇总|管理|记录|查看|工作台|对应做法/u,
+  architecture: /架构|平台|模块|工作台|系统/u,
+  scenarios: /场景|销售|客户|使用|业务/u,
+  implementation: /上线|试点|导入|部署|实施|核对|扩展|培训/u,
+  service: /服务|培训|支持|交付|保障/u,
+  company: /公司|集团|团队|资质|介绍/u,
+  boundary: /边界|限制|不支持|没有提供|不得|未提供|未覆盖/u,
+}
+
+/** 模型主动留空时，从已清洗的真实来源提取短要点；不补造事实。 */
+function extractiveSection(section, item, sourcePaths, sources) {
+  const terms = (item.topics ?? []).map(topic => EXTRACT_TERMS[topic]).filter(Boolean)
+  const candidates = sourcePaths.filter(path => sources.has(path)).flatMap(path =>
+    sources.get(path).split('\n').flatMap(line =>
+      (line.match(/[^。！？；\n]{8,220}[。！？；]?/gu) ?? []).map(quote => ({ path, quote: quote.trim() }))))
+    .filter(({ quote }) => isReadableProse(quote) && !hasInternalCopy(quote))
+    .map(candidate => ({ ...candidate, score: terms.reduce((sum, term) => sum + Number(term.test(candidate.quote)), 0) }))
+    .filter(candidate => candidate.score > 0)
+    .sort((a, b) => b.score - a.score || a.quote.length - b.quote.length)
+  const chosen = []
+  for (const candidate of candidates) {
+    if (chosen.length >= 2) break
+    if (chosen.some(other => other.quote === candidate.quote)) continue
+    chosen.push(candidate)
+  }
+  const blocks = chosen.flatMap(({ path, quote }) => {
+    const text = quote.replace(/^#{1,6}\s*/u, '').replace(/^(?:典型问题|对应做法|使用边界)[:：]\s*/u, '').trim()
+    if (!text || text.length > 220 || !isReadableProse(text)) return []
+    return [{ type: 'para', text }, { type: 'quote', text: `来源：${path}\n${quote}` }]
+  })
+  return blocks.length ? { ...section, blocks } : section
+}
+
 const parameterError = error => {
   const code = String(error?.code ?? error?.failure?.code ?? '')
   const status = Number(error?.status ?? error?.statusCode ?? error?.failure?.status)
   return code === '1210' || status === 400 || /1210|API 调用参数有误/u.test(String(error?.message ?? error?.failure?.message ?? ''))
 }
 
+/** 引用可选择稳定编号，原文由插件回填，避免手抄标点误差。 */
+function evidenceAnchors(content, sourceId, sourcePath) {
+  const pieces = content.match(/[^。\n]{4,220}(?:。|\n|$)/gu) ?? []
+  const stride = Math.max(1, Math.ceil(pieces.length / 18))
+  return pieces.filter((_, index) => index % stride === 0).slice(0, 18)
+    .map((text, index) => ({ id: `${sourceId}:E${index + 1}`, path: sourcePath, text: text.trim() }))
+}
+
 async function askForJson(ctx, agent, signal, system, input, stage = 'json') {
   const started = Date.now()
+  const skills = await loadPresalesSkills(ctx, agent, signal, stage)
+  system += `\n以下 Skill 已在本次调用中显式加载。按规则完成本阶段，不把规则或执行记录写入面客正文。\n${skills}`
+  const inputText = JSON.stringify(input)
   let retryCause
-  const report = (issue, attempt) => console.info('[wlyd-presales] model', JSON.stringify({ stage,
-    ms: Date.now() - started, attempts: attempt + 1, issue, ...(retryCause ? { retryCause } : {}) }))
+  const report = (issue, attempt, failure) => {
+    const code = failure?.code
+    const status = failure?.status ?? failure?.httpStatus
+    console.info('[wlyd-presales] model', JSON.stringify({ stage, ms: Date.now() - started,
+      attempts: attempt + 1, issue, systemChars: system.length, inputChars: inputText.length,
+      ...(typeof code === 'string' && /^[\w-]{1,64}$/u.test(code) ? { failureCode: code } : {}),
+      ...(Number.isInteger(status) ? { httpStatus: status } : {}),
+      ...(retryCause ? { retryCause } : {}) }))
+  }
   let supportsOff = false
   try {
     const info = await ctx.llm.resolveModelInfo?.(agent.options.provider, agent.options.model)
@@ -130,22 +218,25 @@ async function askForJson(ctx, agent, signal, system, input, stage = 'json') {
     let text = ''
     let blockText = ''
     let finish
+    const deadline = AbortSignal.timeout(MODEL_TIMEOUT_MS[stage] ?? DEFAULT_MODEL_TIMEOUT_MS)
+    const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
     try { for await (const chunk of ctx.llm.stream({
       provider: agent.options.provider, model: agent.options.model, system,
-      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: JSON.stringify(input) }],
+      messages: [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: inputText }],
         source: { kind: 'plugin', plugin: 'wlyd-presales-solution' } }],
-      ...(supportsOff ? { reasoningEffort: 'off' } : {}), signal, sessionId: agent?.session?.id,
+      ...(supportsOff ? { reasoningEffort: 'off' } : {}), signal: requestSignal, sessionId: agent?.session?.id,
     })) {
       if (chunk.type === 'text-delta') text += chunk.text
       if (chunk.type === 'block-end' && chunk.block.type === 'text') blockText += chunk.block.text
       if (chunk.type === 'finish') finish = chunk.reason
     } } catch (error) {
       if (signal?.aborted) throw error
+      if (deadline.aborted) { report('model_timeout', attempt, error); return { issue: 'model_timeout' } }
       if (supportsOff && parameterError(error)) {
         retryCause = 'reasoning_parameter_rejected'; supportsOff = false; continue
       }
       const issue = parameterError(error) ? 'provider_bad_request' : 'model_error'
-      report(issue, attempt)
+      report(issue, attempt, error)
       return { issue }
     }
     if (finish?.kind === 'error' && supportsOff
@@ -158,7 +249,7 @@ async function askForJson(ctx, agent, signal, system, input, stage = 'json') {
       const issue = finish?.kind === 'error'
         ? parameterError(finish.failure) ? 'provider_bad_request' : 'model_error'
         : finish?.kind ?? 'no_finish'
-      report(issue, attempt)
+      report(issue, attempt, finish?.failure)
       return { issue }
     }
     try { const value = parseJson(text || blockText); report('ok', attempt); return { value } }
@@ -198,31 +289,48 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
   let budget = 40_000
   const limited = []
   const aliases = new Map()
+  const evidence = new Map()
   for (const [sourcePath, content] of sources) {
     if (budget <= 0) break
     const id = `K${limited.length + 1}`
-    const excerpt = content.slice(0, budget)
-    limited.push({ id, path: sourcePath, content: excerpt })
+    // 均分上下文，避免第一份长材料吃掉全部预算，后续附件完全消失。
+    const quota = Math.max(2000, Math.floor(budget / (sources.size - limited.length)))
+    const excerpt = content.slice(0, Math.min(budget, quota))
+    const anchors = evidenceAnchors(excerpt, id, sourcePath)
+    anchors.forEach(anchor => evidence.set(anchor.id, anchor))
+    limited.push({ id, path: sourcePath, content: excerpt,
+      evidence: anchors.map(({ id, text }) => ({ id, text })) })
     aliases.set(id, sourcePath)
     budget -= excerpt.length
   }
   const scenario = salesScenario(manifest)
-  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要核对的状态留给系统校对记录，正文不放制作提示。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。开篇先让第一次接触产品的读者知道产品是什么、服务谁、回应什么问题。${scenario === 'growth' ? '参考人工方案的阅读顺序：增长环境与趋势→现状与挑战→总体方案→平台能力→实施与服务→公司介绍；根据材料合并或省略无据内容。环境页说清变化、业务影响和当前方案的关联。痛点章深入讲清问题名、工作场景和实际麻烦；后面的方案章只简要回扣痛点，重点讲对应做法、使用者动作和可见结果。示例标签“线索分散、工具割裂、内容负担、协同低效”只有在本轮来源支持时才使用，不能固定四类或照抄示例。' : '按企业协同的背景、场景问题、对应做法与实施边界组织。'}痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的信息不能冒充已核实事实。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","text":"段落","items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"sourceId":"sources 中的 ID","quote":"逐字原文片段"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。关键数字可用 metrics{items:[{label,value}]} 做大字卡片，但每个标签和值都须逐字出现在同一段 quote 中，不要从年份、页码或不同口径拼指标。普通章节尽量写 2—4 个有信息量的块；有依据的痛点章可写 3—5 个块，分别解释具体问题。每块只陈述其引用原文可支持的内容，sourceId 必须是输入 sources 的 ID，且该来源须属于本章；quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。${CUSTOMER_STYLE}`
+  const system = `你是面向客户的售前方案撰写员。按大纲把资料提炼为客户能读懂的事实与价值机制，不复制材料原文、HTML/CSS 代码或 PDF 乱码，也不新增企业事实。标题、导语、段落、要点和步骤都写成可直接给客户阅读的正式表达：优先说明业务价值与适用场景，避免“本章”“资料显示”“模型判断”“原文摘录”等内部制作话语；需要核对的状态留给系统校对记录，正文不放制作提示。${settings.sales ? `这是${settings.stage === 'deep' ? '深入接触客户' : '初次接触客户'}的${scenario === 'growth' ? '企业增长/营销' : '企业协同'}售前方案。开篇先让第一次接触产品的读者知道产品是什么、服务谁、回应什么问题。${scenario === 'growth' ? '参考人工方案的阅读顺序：增长环境与趋势→现状与挑战→总体方案→平台能力→实施与服务→公司介绍；根据材料合并或省略无据内容。环境页说清变化、业务影响和当前方案的关联。痛点章深入讲清问题名、工作场景和实际麻烦；后面的方案章只简要回扣痛点，重点讲对应做法、使用者动作和可见结果。示例标签“线索分散、工具割裂、内容负担、协同低效”只有在本轮来源支持时才使用，不能固定四类或照抄示例。' : '按企业协同的背景、场景问题、对应做法与实施边界组织。'}痛点与做法必须前后呼应，不混用不同产品线的能力或数字。技术接口只作为能力或实施依据，不能把 API、参数或文档目录当作客户方案正文。初次接触时用“典型挑战”，不得声称该客户已经遇到问题；深入接触时只把客户资料明确写出的内容称为客户现状。公开资料只能补行业背景或典型问题，不能证明本企业产品能力。用户补充的信息不能冒充已核实事实。` : ''}仅输出 JSON：{"sections":[{"heading":"标题","lead":"本章一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","label":"短类别","title":"短主张","text":"50—110字具体说明","emphasis":["正文已有重点词"],"items":["要点"],"chartType":"bar|line","title":"图表标题","unit":"统一单位","points":[{"label":"原文类别或时间","value":1}],"evidenceId":"对应原文锚点 ID（优先）","sourceId":"sources 中的 ID（无锚点时）","quote":"逐字原文片段（无锚点时）"}]}]}。图表仅在同一来源连续原文中同时包含 2—6 个类别或时间、对应数字与统一单位时生成；比较用 bar，时间序列用 line。关键数字可用 metrics{items:[{label,value}]} 做大字卡片，但每个标签和值都须逐字出现在同一段 quote 中，不要从年份、页码或不同口径拼指标。普通章节尽量写 2—4 个有信息量的块；有依据的痛点章可写 3—5 个块，分别解释具体问题。每块只陈述其引用原文可支持的内容，优先选择对应 evidenceId；无合适锚点时 sourceId 必须是输入 sources 的 ID，且该来源须属于本章，quote 必须是该来源连续原文；没有依据的章返回空 blocks。不要伪造收益、案例、价格或承诺。${CUSTOMER_STYLE}`
   const sections = [...fallback]
+  const abstained = new Set()
+  let wholeModelFailed = false
   try {
     const reply = await askForJson(ctx, agent, signal, system,
       { outline: outline.map(item => ({ heading: item.heading, topics: item.topics,
         writingTask: chapterWritingRule(item), sourcePaths: item.sourcePaths,
         sourceIds: (item.sourcePaths ?? []).map(path => [...aliases].find(([, value]) => value === path)?.[0]).filter(Boolean) })),
-      sources: limited }, 'draft-all')
+      sources: limited, citationRule: '每块优先填写 evidenceId，选择 sources.evidence 中最相关的原文 ID。插件回填精确原文；没有适合锚点时仍可使用 sourceId 加逐字 quote。evidenceId 不能虚构。' }, 'draft-all')
     if (Array.isArray(reply.value?.sections) && reply.value.sections.length === outline.length) {
       for (const [index, candidate] of reply.value.sections.entries()) {
-        sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources, aliases)
-        if (sections[index] === fallback[index]) issues.push('unverified_content')
+        if (Array.isArray(candidate?.blocks) && candidate.blocks.length === 0) abstained.add(index)
+        sections[index] = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(outline[index], manifest), sources, aliases, evidence)
+        if (sections[index] === fallback[index]) {
+          console.warn('[wlyd-presales] rejected-section', JSON.stringify({ stage: 'draft-all',
+            ...rejectedSectionMeta(candidate, sectionEvidencePaths(outline[index], manifest), sources, aliases, evidence) }))
+          issues.push('unverified_content')
+        }
       }
-    } else issues.push(reply.issue ?? 'invalid_sections')
+    } else {
+      issues.push(reply.issue ?? 'invalid_sections')
+      wholeModelFailed = ['model_error', 'model_timeout', 'provider_bad_request'].includes(reply.issue)
+    }
   } catch (error) {
     if (signal?.aborted) throw error
+    console.warn('[wlyd-presales] compose-exception', JSON.stringify({ error: error?.name ?? 'Error' }))
     issues.push('model_error')
   }
   const retryChapter = async ([index, item]) => {
@@ -231,25 +339,51 @@ export async function composeSections(ctx, agent, signal, manifest, outline, lin
         name: sourcePath.split('/').at(-1), content: sectionSourceExcerpt(sources.get(sourcePath), item), path: sourcePath }))
     if (!relevant.length) return { index, section: fallback[index] }
     const aliases = new Map(relevant.map(source => [source.id, source.path]))
+    const evidence = new Map()
+    relevant.forEach(source => {
+      source.evidence = evidenceAnchors(source.content, source.id, source.path)
+      source.evidence.forEach(anchor => evidence.set(anchor.id, anchor))
+    })
     try {
       const reply = await askForJson(ctx, agent, signal,
-        `只写售前方案中的「${item.heading}」这一章，面向客户表达，普通章提炼 1—3 个有信息量的段落或要点；有足够依据的痛点章可以写 3—5 个问题块。${chapterWritingRule(item)}原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line；单个关键数字可用 metrics{items:[{label,value}]}，但标签和值都必须逐字出现在同一段 quote。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","text":"段落","items":["要点"],"sourceId":"S1","quote":"对应来源中的连续原文"}]}。每块 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
-        { sources: relevant.map(({ id, name, content }) => ({ id, name, content })) }, 'draft-section')
+        `只写售前方案中的「${item.heading}」这一章，面向客户表达，普通章提炼 1—3 个有信息量的段落或要点；有足够依据的痛点章可以写 3—5 个问题块。${chapterWritingRule(item)}原文确有同单位的 2—6 组数字时可用 chart{chartType:"bar|line",title,unit,points:[{label,value}]}，比较用 bar、按时间递增的序列用 line；单个关键数字可用 metrics{items:[{label,value}]}，但标签和值都必须逐字出现在同一段 quote。没有依据就返回空 blocks。仅输出 JSON：{"heading":"${item.heading}","lead":"一句话主张","blocks":[{"type":"para|bullets|steps|chart|metrics","label":"短类别","title":"短主张","text":"50—110字具体说明","emphasis":["正文已有重点词"],"items":["要点"],"evidenceId":"S1:E1（优先选择对应锚点）","sourceId":"S1（无锚点时）","quote":"对应来源中的连续原文（无锚点时）"}]}。每块优先选择输入中的 evidenceId；无合适锚点时 sourceId 必须是输入资料的 ID，quote 逐字复制；图表每个标签、数值和单位均须出现在同一段 quote；不要编造产品能力、客户事实、收益或承诺。${CUSTOMER_STYLE}`,
+        { sources: relevant.map(({ id, name, content, evidence }) => ({ id, name, content,
+          evidence: evidence.map(({ id, text }) => ({ id, text })) })),
+          citationRule: '优先填写 evidenceId 选择原文锚点，插件精确回填；没有适合锚点时使用 sourceId 与逐字 quote。' }, 'draft-section')
       const candidate = reply.value?.section ?? reply.value
-      const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases)
-      return { index, section, issue: section === fallback[index] ? reply.issue ?? 'unverified_content' : undefined }
+      const empty = Array.isArray(candidate?.blocks) && candidate.blocks.length === 0
+      const section = sectionFromCandidate(candidate, fallback[index], sectionEvidencePaths(item, manifest), sources, aliases, evidence)
+      if (section === fallback[index]) console.warn('[wlyd-presales] rejected-section', JSON.stringify({ stage: 'draft-section',
+        ...rejectedSectionMeta(candidate, sectionEvidencePaths(item, manifest), sources, aliases, evidence) }))
+      return { index, section, abstained: empty, issue: section === fallback[index] ? reply.issue ?? 'unverified_content' : undefined }
     } catch (error) {
       if (signal?.aborted) throw error
+      console.warn('[wlyd-presales] section-exception', JSON.stringify({ error: error?.name ?? 'Error' }))
       return { index, section: fallback[index], issue: 'model_error' }
     }
   }
   const missingChapters = [...outline.entries()].filter(([index]) => sections[index] === fallback[index])
-  // 最多两章并行，既缩短补写等待，又避免把整份方案同时打向模型服务。
-  for (let index = 0; index < missingChapters.length; index += 2) {
-    const results = await Promise.all(missingChapters.slice(index, index + 2).map(retryChapter))
+  // 整稿遇到模型服务错误时先试一章；仍失败就停止，避免对同一故障重复请求。
+  const batchSize = wholeModelFailed ? 1 : 2
+  for (let index = 0; index < missingChapters.length; index += batchSize) {
+    const results = await Promise.all(missingChapters.slice(index, index + batchSize).map(retryChapter))
     for (const result of results) {
       sections[result.index] = result.section
+      if (result.abstained) abstained.add(result.index)
       if (result.issue) issues.push(result.issue)
+    }
+    if (wholeModelFailed && results.every(result =>
+      result.section === fallback[result.index]
+      && ['model_error', 'model_timeout', 'provider_bad_request'].includes(result.issue))) break
+  }
+  for (const [index, item] of outline.entries()) {
+    if (sections[index] !== fallback[index] || !abstained.has(index)) continue
+    const recovered = extractiveSection(fallback[index], item, sectionEvidencePaths(item, manifest), sources)
+    if (recovered !== fallback[index]) {
+      sections[index] = recovered
+      issues.push('source_extract_fallback')
+      console.info('[wlyd-presales] extractive-recovery', JSON.stringify({ chapter: index + 1,
+        evidenceBlocks: recovered.blocks.filter(block => block.type === 'quote').length }))
     }
   }
   return withIssues(sections)
@@ -424,6 +558,8 @@ export async function assessMaterials(ctx, agent, signal, manifest, userNote, no
       userNote: userNote?.trim() ? noteLabel : undefined }
   } catch (error) {
     if (signal?.aborted) throw error
+    console.warn('[wlyd-presales] evidence-exception', JSON.stringify({ error: error?.name ?? 'Error',
+      message: String(error?.message ?? '').slice(0, 180) }))
     return { kind: 'question', reason: 'model_unavailable', question: `材料判断暂未完成。${FALLBACK_QUESTION}` }
   }
 }

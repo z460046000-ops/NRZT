@@ -78,6 +78,8 @@ export function suggestOutline(manifest, links = [], candidate) {
       const sourcePaths = unique((Array.isArray(item.sourcePaths) ? item.sourcePaths : [])
         .filter(source => available.includes(source)))
       if (sourcePaths.length === 0) sourcePaths.push(...recoveredChunkPaths(manifest, topics))
+      // 单份材料足以支持多个角度；模型漏填 sourceIds 时仍保留这份真实来源。
+      if (sourcePaths.length === 0 && available.length === 1) sourcePaths.push(available[0])
       sections.push(entry(heading, topics, sourcePaths))
       seen.add(heading)
     }

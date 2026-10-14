@@ -14,7 +14,10 @@ function displayText(value) {
 function displayBlock(block, assetNames) {
   if (block.type === 'para' || block.type === 'quote') {
     if (sourceQuote(block.text)) return null
-    return block.text?.trim() ? { id: block.id, type: block.type, text: displayText(block.text) } : null
+    return block.text?.trim() ? { id: block.id, type: block.type, text: displayText(block.text),
+      ...(block.title ? { title: displayText(block.title) } : {}),
+      ...(block.label ? { label: displayText(block.label) } : {}),
+      ...(block.emphasis ? { emphasis: block.emphasis.filter(word => block.text.includes(word)) } : {}) } : null
   }
   if (block.type === 'bullets' || block.type === 'steps') {
     return { type: block.type, items: block.items.map(displayText) }
@@ -74,6 +77,8 @@ export function visibleExternalText(solution) {
     parts.push(section.heading, section.lead)
     for (const block of section.blocks) {
       if (block.text) parts.push(block.text)
+      if (block.title) parts.push(block.title)
+      if (block.label) parts.push(block.label)
       if (block.caption) parts.push(block.caption)
       if (block.items) parts.push(...block.items.flatMap(item => typeof item === 'string' ? [item] : Object.values(item)))
       if (block.headers) parts.push(...block.headers, ...block.rows.flat())

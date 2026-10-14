@@ -72,7 +72,9 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const isFilled = section => section.blocks.some(block => {
       const lines = block.type === 'para' ? [block.text]
         : ['bullets', 'steps'].includes(block.type) ? block.items : []
-      return block.type === 'chart' && block.points?.length >= 2 || lines?.some(substantive)
+      return block.type === 'chart' && block.points?.length >= 2
+        || block.type === 'table' && block.rows?.some(row => row.some(substantive))
+        || block.type === 'metrics' && block.items?.some(item => substantive(item.value)) || lines?.some(substantive)
     })
   const filled = sections.filter(isFilled).length
   const missing = sections.filter(section => !isFilled(section)).map(section => section.heading)
@@ -82,6 +84,7 @@ async function generateDraft(ctx, agent, signal, pending, links) {
       : issues.includes('no_readable_source') ? '导入资料中没有可用正文'
         : issues.includes('provider_bad_request') ? '模型服务拒绝请求参数（HTTP 400 / 1210）'
         : issues.includes('max-tokens') ? '模型输出被截断'
+          : issues.includes('model_timeout') ? '模型服务等待超时'
           : issues.includes('model_error') ? '模型调用失败'
             : issues.includes('invalid_json') || issues.includes('invalid_sections')
               ? '模型返回内容不符合方案结构，未能解析出有效章节'
@@ -91,6 +94,8 @@ async function generateDraft(ctx, agent, signal, pending, links) {
       ? '请确认知识库原文可读取，或补充产品资料后重试；为保证事实准确，本次没有放宽引用校验。'
       : issues.includes('provider_bad_request')
         ? '请检查当前模型路由的参数映射；插件已在关闭思考参数可能不兼容时撤去该参数重试一次。'
+      : issues.includes('model_timeout')
+        ? '模型未在限定时间内返回；请检查当前模型服务状态后重试。'
       : issues.includes('invalid_json') || issues.includes('invalid_sections')
         ? '请检查当前模型的结构化输出能力后重试；也可以补充更清晰的产品与客户资料。'
         : '请检查当前模型后重试，或补充更清晰的产品与客户资料。'
@@ -100,14 +105,18 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const overview = sections.find(section => ['architecture', 'capabilities'].includes(section.kind))?.lead
   const subtitle = typeof overview === 'string' && overview.length <= 90
     ? overview : `${manifest.label}的业务场景、方案能力与实施路径`
+  const deliverable = sections.filter(isFilled)
+  const hasCombined = deliverable.some(section => section.kind === 'problem_solution')
+  const hasBoth = deliverable.some(section => section.kind === 'pains') && deliverable.some(section => section.kind === 'solution')
+  const usableLinks = hasCombined || hasBoth ? links : []
   const solution = await ctx.tools.execute({
     callId: randomUUID(), name: 'wlyd_solution',
     arguments: {
       // composeSections 的数组带有仅供诊断的非枚举属性；DSH 工具参数要求纯 JSON。
-      title: `${manifest.label}售前解决方案`, sections: [...sections],
+      title: `${manifest.label}售前解决方案`, sections: deliverable,
       ...(pending.auto ? { subtitle,
         meta: { product: manifest.label } } : {}),
-      pain_solution_links: links,
+      pain_solution_links: usableLinks,
       output_base: `${runId}/solution`,
     }, agent, signal,
   })
@@ -124,18 +133,21 @@ async function generateDraft(ctx, agent, signal, pending, links) {
   const webBase = value.editUrl?.endsWith('/solution.html')
     ? value.editUrl.slice(0, -'solution.html'.length) : undefined
   const delivery = webBase
-    ? `![方案结构预览](${webBase}preview.svg)\n\n[打开内部稿并编辑](${value.editUrl}) · [内部稿 Word](${webBase}solution.docx) · [内部稿 Markdown](${webBase}solution.md) · [内部 JSON 源稿](${webBase}solution.json)\n\n外发请在内部稿右下角选择“查看外部稿”，完成检查后下载独立的外发文件。`
+    ? `![方案结构预览](${webBase}preview.svg)\n\n[打开内部稿并编辑](${value.editUrl}) · [内部稿 Word](${webBase}solution.docx) · [内部稿 Markdown](${webBase}solution.md) · [内部 JSON 源稿](${webBase}solution.json)\n\n外发请在内部稿右下角选择“外部稿预览”，完成检查后下载独立的外发文件。`
     : `内部稿 HTML：${value.editUrl}；内部稿 Markdown：${value.markdownPath}；内部稿 Word：${value.docxPath}`
   const intro = pending.auto
     ? `已自动检索资料，按${pending.stageType === 'deep' ? '深入接触' : '初次接触'}场景生成初稿；可继续补充客户信息或直接编辑。${pending.sourceSummary ? `\n\n**资料来源与检索覆盖**：${pending.sourceSummary}` : ''}`
     : '已按确认大纲生成初稿，请先预览和复核。'
   const retrievalNote = !pending.auto && pending.sourceSummary ? `\n\n**检索覆盖**：${pending.sourceSummary}` : ''
+  const extractionNote = (sections.generationIssues ?? []).includes('source_extract_fallback')
+    ? '\n\n**初稿说明**：模型留空的章节已从清洗后的原文提取短要点并附来源；这些是内部可编辑草稿，外发前请核对表达与适用范围。'
+    : ''
   return {
     kind: 'success',
-    text: `## ${manifest.label}售前解决方案\n\n${intro}${retrievalNote}\n\n${delivery}\n\n**内容结构** · ${sections.length} 章\n\n${sections.map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
-      + (links.length ? `**证据状态**：${links.length} 组问题与做法已逐项对应，仍需人工复核后使用。`
+    text: `## ${manifest.label}售前解决方案\n\n${intro}${retrievalNote}${extractionNote}\n\n${delivery}\n\n**内容结构** · ${filled} 章\n\n${sections.filter(isFilled).map((section, index) => `- **${String(index + 1).padStart(2, '0')}** · ${section.heading}`).join('\n')}\n\n`
+      + (usableLinks.length ? `**证据状态**：${usableLinks.length} 组问题与做法已逐项对应，仍需人工复核后使用。`
         : '**证据状态**：客户问题与做法尚无可靠对应关系，相关内容待确认，暂不作为完整方案对外使用。')
-      + (missing.length ? `\n\n**本版仍需补充**：${missing.join('、')}。这是一份可继续编辑的初稿，含待确认内容，不能直接外发。你可以在输入框补充目标客户、实际问题、场景或产品已验证能力；也可以回复“搜索公开资料”，让我只补行业背景与典型问题。补充后会另存新版。` : ''),
+      + (missing.length ? `\n\n**本版仍需补充**：${missing.join('、')}。当前已交付有依据的章节。缺少的内容不会填成占位页；外发前请在检查面板复核。你可以在输入框补充目标客户、实际问题、场景或产品已验证能力；也可以回复“搜索公开资料”，让我只补行业背景与典型问题。补充后会另存新版。` : ''),
     ...(missing.length ? { pending: { ...pending, stage: 'draft-gaps', missing } } : {}),
   }
 }
@@ -301,7 +313,7 @@ async function ingestAndAssess(ctx, agent, signal, inputPath, label, runId, sale
     callId: randomUUID(), name, arguments: args, agent, signal,
   })
   const ingested = await call('wlyd_ingest', {
-    path: inputPath,
+    path: inputPath, max_chars_per_file: 60000,
     output_dir: `${runId}/analysis`,
     ...(label ? { label } : {}),
   })
@@ -443,7 +455,7 @@ export async function runPresales(ctx, agent, signal, source, config) {
   const runId = `presales-runs/${Date.now()}-${randomUUID().slice(0, 8)}`
   if (source.kind === 'auto') return autoPresales(ctx, agent, signal, source, config, runId)
   if (source.kind === 'platform') return pullPlatformMaterials(ctx, agent, signal, config, runId)
-  return ingestAndAssess(ctx, agent, signal, source.path, undefined, runId)
+  return ingestAndAssess(ctx, agent, signal, source.path, source.sales?.product, runId, source.sales)
 }
 
 /** 按编号或唯一名称子串选择项目/知识库;选不出返回 undefined。 */

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtemp } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { externalizeSolution } from '../src/external-copy.js'
 import { renderHtml } from '../src/html.js'
 import { assignVisualDesign } from '../src/visual-plan.js'
@@ -10,14 +13,19 @@ const baseSolution = () => ({ title: 'CallWan 售前方案', theme: 'corporate',
     { type: 'bullets', items: ['整理品牌内容', '编排渠道发布', '承接互动线索'] },
   ] }], painSolutionLinks: [] })
 
-test('整稿风格依据内容选择，同类内容稳定，显式主题优先', async () => {
+test('整稿风格依据内容选择，新方案配色轮换，保存后稳定且显式主题优先', async () => {
   const first = baseSolution()
   const second = baseSolution()
-  await assignVisualDesign(first)
-  await assignVisualDesign(second)
+  const statePath = path.join(await mkdtemp(path.join(os.tmpdir(), 'wlyd-palette-')), 'state.json')
+  await assignVisualDesign(first, { statePath })
+  await assignVisualDesign(second, { statePath })
   assert.equal(first.visualDesign.direction, 'paper')
   assert.equal(first.theme, 'elegant')
-  assert.deepEqual(first.visualDesign, second.visualDesign)
+  assert.equal(first.visualDesign.direction, second.visualDesign.direction)
+  assert.notEqual(first.visualDesign.palette, second.visualDesign.palette)
+  const saved = structuredClone(first.visualDesign)
+  await assignVisualDesign(first, { statePath })
+  assert.deepEqual(first.visualDesign, saved)
   const medical = baseSolution()
   medical.title = '医院病历质控方案'
   await assignVisualDesign(medical)
